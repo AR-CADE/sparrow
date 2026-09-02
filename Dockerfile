@@ -42,7 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-render0-dev \
     libxcb-res0-dev \
     libxcb-xfixes0-dev \
-    libxcb-errors-dev \
     libx11-xcb-dev \
     liblcms2-dev \
     libudev-dev \
