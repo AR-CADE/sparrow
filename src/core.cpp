@@ -667,7 +667,16 @@ int Core::init(sparrow_options opts, bool allow_root)
 
     instance->allocator =
         wlr_allocator_autocreate(instance->backend, instance->renderer);
-    assert(instance->allocator);
+    if (instance->allocator == nullptr)
+    {
+        wlr_log(WLR_ERROR,
+            "Failed to create allocator: neither DRM render node (/dev/dri) nor /dev/udmabuf is available");
+        wlr_egl_destroy(egl);
+        wl_display_destroy_clients(instance->wl_display);
+        wl_display_destroy(instance->wl_display);
+        delete (instance);
+        return EXIT_FAILURE;
+    }
 
     if (!allow_root && !drop_permissions())
     {
