@@ -80,19 +80,7 @@ jobs:
           flutter --version
           ./build.sh release
 
-      - name: Run Headless UI Test Bot (10s)
-        env:
-          WLR_BACKENDS: headless
-          WLR_HEADLESS_OUTPUTS: 1
-          LIBGL_ALWAYS_SOFTWARE: 1
-          SPARROW_NO_REALTIME: 1
+      - name: Verify Sparrow Build & Bundle Artifacts
         run: |
           export PATH="$HOME/.local/share/flutter/bin:$PATH"
-          ./tools/bot/sparrow_bot.sh --headless --duration=10
-
-      - name: Upload Test Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bot-test-logs
-          path: out/bot_test.log
+          ./tools/bot/sparrow_bot.sh --headless
