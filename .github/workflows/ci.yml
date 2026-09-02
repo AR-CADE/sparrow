@@ -8,77 +8,76 @@ on:
 
 jobs:
   test_cpp_code_style:
-    name: "Check C++ code style with official Uncrustify"
-    runs-on: ubuntu-24.04
+    name: "Check C++ code style with Uncrustify (openSUSE)"
+    runs-on: ubuntu-latest
+    container:
+      image: opensuse/tumbleweed:latest
     steps:
+      - name: Install Uncrustify and Git
+        run: |
+          zypper -n in --no-recommends uncrustify git findutils ca-certificates
+          git config --global --add safe.directory '*'
+
       - name: Checkout Sparrow repository
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends git cmake gcc g++ make
-
-      - name: Cache Uncrustify binary
-        id: cache-uncrustify
-        uses: actions/cache@v4
-        with:
-          path: uncrustify/build/uncrustify
-          key: uncrustify-0.82.0-${{ runner.os }}
-
-      - name: Checkout official Uncrustify
-        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: uncrustify/uncrustify
-          ref: uncrustify-0.82.0
-          path: uncrustify
-
-      - name: Build official Uncrustify
-        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
-        run: |
-          cd uncrustify
-          mkdir -p build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
-          make -j$(nproc)
-          cd ../..
-
       - name: Run Uncrustify check on src/
         run: |
-          git ls-files 'src/*.cpp' 'src/*.hpp' | xargs ./uncrustify/build/uncrustify -c uncrustify.ini --no-backup --replace
+          git config --global --add safe.directory '*'
+          git ls-files 'src/*.cpp' 'src/*.hpp' | xargs uncrustify -c uncrustify.ini --no-backup --replace
           git diff --exit-code
 
   build-and-test:
-    name: Build & Headless UI Regression Test
-    runs-on: ubuntu-24.04
+    name: Build & Headless UI Regression Test (openSUSE Tumbleweed)
+    runs-on: ubuntu-latest
+    container:
+      image: opensuse/tumbleweed:latest
 
     steps:
+      - name: Install Git and setup environment
+        run: |
+          zypper -n in --no-recommends git ca-certificates
+          git config --global --add safe.directory '*'
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install system dependencies
+      - name: Install openSUSE system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential clang llvm lld meson ninja-build pkg-config \
-            libwayland-dev wayland-protocols libdrm-dev libgbm-dev libinput-dev \
-            libxkbcommon-dev libpixman-1-dev libegl1-mesa-dev libgles2-mesa-dev \
-            libdisplay-info-dev libseat-dev libliftoff-dev libxcb1-dev \
-            libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev \
-            libxcb-render0-dev libxcb-res0-dev libxcb-xfixes0-dev \
-            libx11-xcb-dev liblcms2-dev libudev-dev hwdata glslang-tools \
-            python3-pip python3-setuptools \
-            wlrctl weston mesa-utils libgl1-mesa-dri
-          sudo pip3 install --break-system-packages --upgrade meson
+          git config --global --add safe.directory '*'
+          zypper -n in --no-recommends \
+            clang gcc gcc-c++ lld llvm meson ninja pkgconf-pkg-config \
+            python3 python3-pip python3-setuptools \
+            wayland-devel wayland-protocols-devel \
+            libdrm-devel libgbm-devel libinput-devel \
+            libxkbcommon-devel libxkbcommon-x11-devel \
+            libpixman-1-0-devel Mesa-libEGL-devel Mesa-libGLESv2-devel \
+            libdisplay-info-devel libliftoff-devel seatd-devel \
+            libxcb-devel xcb-util-devel xcb-util-wm-devel xcb-util-renderutil-devel xcb-util-errors-devel \
+            Mesa-libGL1 Mesa-dri glslang-devel liblcms2-devel systemd-devel hwdata \
+            wlrctl weston \
+            curl unzip tar xz which gzip
 
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - name: Cache Flutter SDK
+        id: cache-flutter
+        uses: actions/cache@v4
         with:
-          channel: 'stable'
-          cache: true
+          path: /opt/flutter
+          key: flutter-stable-${{ runner.os }}
+
+      - name: Install Flutter SDK
+        if: steps.cache-flutter.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 -b stable https://github.com/flutter/flutter.git /opt/flutter
+          git config --global --add safe.directory /opt/flutter
+          /opt/flutter/bin/flutter precache --linux
+
+      - name: Add Flutter to PATH
+        run: |
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
+          git config --global --add safe.directory /opt/flutter
 
       - name: Build Sparrow (Release)
         run: |
