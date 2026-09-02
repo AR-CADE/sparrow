@@ -69,7 +69,10 @@ jobs:
             libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev \
             libxcb-render0-dev libxcb-res0-dev libxcb-xfixes0-dev \
             libx11-xcb-dev liblcms2-dev libudev-dev hwdata glslang-tools \
+            python3-pip python3-setuptools \
             wlrctl weston mesa-utils libgl1-mesa-dri
+          sudo pip3 install --break-system-packages --upgrade meson
+
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
