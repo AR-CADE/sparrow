@@ -1,0 +1,98 @@
+name: Sparrow CI & Headless Test Bot
+
+on:
+  push:
+    branches: [ master, main, '0.*', 'release/*' ]
+  pull_request:
+    branches: [ master, main, '0.*', 'release/*' ]
+
+jobs:
+  test_cpp_code_style:
+    name: "Check C++ code style with official Uncrustify"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Sparrow repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git cmake gcc g++ make
+
+      - name: Cache Uncrustify binary
+        id: cache-uncrustify
+        uses: actions/cache@v4
+        with:
+          path: uncrustify/build/uncrustify
+          key: uncrustify-0.82.0-${{ runner.os }}
+
+      - name: Checkout official Uncrustify
+        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: uncrustify/uncrustify
+          ref: uncrustify-0.82.0
+          path: uncrustify
+
+      - name: Build official Uncrustify
+        if: steps.cache-uncrustify.outputs.cache-hit != 'true'
+        run: |
+          cd uncrustify
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc)
+          cd ../..
+
+      - name: Run Uncrustify check on src/
+        run: |
+          git ls-files 'src/*.cpp' 'src/*.hpp' | xargs ./uncrustify/build/uncrustify -c uncrustify.ini --no-backup --replace
+          git diff --exit-code
+
+  build-and-test:
+    name: Build & Headless UI Regression Test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang llvm lld meson ninja-build pkg-config \
+            libwayland-dev wayland-protocols libdrm-dev libgbm-dev libinput-dev \
+            libxkbcommon-dev libpixman-1-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libdisplay-info-dev libseat-dev libliftoff-dev libxcb1-dev \
+            libxcb-composite0-dev libxcb-ewmh-dev libxcb-icccm4-dev \
+            libxcb-render0-dev libxcb-res0-dev libxcb-xfixes0-dev libxcb-errors-dev \
+            libx11-xcb-dev liblcms2-dev libudev-dev hwdata glslang-tools \
+            wlrctl weston mesa-utils libgl1-mesa-dri
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Build Sparrow (Release)
+        run: |
+          ./build.sh release
+
+      - name: Run Headless UI Test Bot (10s)
+        env:
+          WLR_BACKENDS: headless
+          WLR_HEADLESS_OUTPUTS: 1
+          LIBGL_ALWAYS_SOFTWARE: 1
+          SPARROW_NO_REALTIME: 1
+        run: |
+          ./tools/bot/sparrow_bot.sh --headless --duration=10
+
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-test-logs
+          path: out/bot_test.log

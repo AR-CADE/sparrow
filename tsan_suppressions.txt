@@ -1,0 +1,7 @@
+# ThreadSanitizer suppression file for Sparrow
+# Suppresses false positives from uninstrumented system GPU drivers (Mesa/Gallium/DRM)
+
+race:libgallium
+race:libEGL_mesa
+race:libdrm
+race:libfontconfig
