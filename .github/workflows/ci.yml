@@ -55,7 +55,7 @@ jobs:
         run: |
           git config --global --add safe.directory '*'
           zypper -n in --no-recommends \
-            clang gcc gcc-c++ lld llvm meson ninja pkgconf-pkg-config \
+            clang gcc gcc-c++ lld llvm meson ninja pkgconf-pkg-config cmake \
             python3 python3-pip python3-setuptools \
             wayland-devel wayland-protocols-devel \
             libdrm-devel libgbm-devel libinput-devel \
@@ -64,7 +64,7 @@ jobs:
             libdisplay-info-devel libliftoff-devel seatd-devel \
             libxcb-devel xcb-util-devel xcb-util-wm-devel xcb-util-renderutil-devel xcb-util-errors-devel \
             Mesa-libGL1 Mesa-dri glslang-devel liblcms2-devel systemd-devel hwdata \
-            wlrctl weston xwayland \
+            wlrctl weston xwayland gtk3-devel \
             curl unzip tar xz which gzip jq
 
       - name: Install Flutter SDK
