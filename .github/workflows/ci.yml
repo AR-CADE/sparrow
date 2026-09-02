@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: opensuse/tumbleweed:latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Install Uncrustify and Git
         run: |
@@ -32,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: opensuse/tumbleweed:latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
     steps:
       - name: Install Git and setup environment
@@ -66,9 +74,10 @@ jobs:
           channel: 'stable'
           cache: true
 
-
       - name: Build Sparrow (Release)
         run: |
+          export PATH="$FLUTTER_ROOT/bin:$PATH"
+          flutter --version
           ./build.sh release
 
       - name: Run Headless UI Test Bot (10s)
