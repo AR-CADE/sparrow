@@ -68,15 +68,16 @@ jobs:
             wlrctl weston \
             curl unzip tar xz which gzip jq
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
+      - name: Install Flutter SDK
+        run: |
+          curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz | tar -xJ -C /opt
+          git config --global --add safe.directory /opt/flutter
+          /opt/flutter/bin/flutter precache --linux
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
 
       - name: Build Sparrow (Release)
         run: |
-          export PATH="$FLUTTER_ROOT/bin:$PATH"
+          export PATH="/opt/flutter/bin:$PATH"
           flutter --version
           ./build.sh release
 
