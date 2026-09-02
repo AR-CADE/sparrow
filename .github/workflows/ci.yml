@@ -58,7 +58,7 @@ jobs:
             libxcb-devel xcb-util-devel xcb-util-wm-devel xcb-util-renderutil-devel xcb-util-errors-devel \
             Mesa-libGL1 Mesa-dri glslang-devel liblcms2-devel systemd-devel hwdata \
             wlrctl weston \
-            curl unzip tar xz which gzip
+            curl unzip tar xz which gzip jq
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
