@@ -60,11 +60,11 @@ jobs:
             wayland-devel wayland-protocols-devel \
             libdrm-devel libgbm-devel libinput-devel \
             libxkbcommon-devel libxkbcommon-x11-devel \
-            libpixman-1-0-devel Mesa-libEGL-devel Mesa-libGLESv2-devel \
+            libpixman-1-0-devel Mesa-libEGL-devel Mesa-libGLESv2-devel Mesa-libGLESv3-devel \
             libdisplay-info-devel libliftoff-devel seatd-devel \
             libxcb-devel xcb-util-devel xcb-util-wm-devel xcb-util-renderutil-devel xcb-util-errors-devel \
             Mesa-libGL1 Mesa-dri glslang-devel liblcms2-devel systemd-devel hwdata \
-            wlrctl weston \
+            wlrctl weston xwayland \
             curl unzip tar xz which gzip jq
 
       - name: Install Flutter SDK
