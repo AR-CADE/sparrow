@@ -254,7 +254,17 @@ function build_client() {
     rm -rf build/shell
     mkdir -p build/shell/lib
 
-    LOCAL_BIN=~/.local/share/flutter/bin
+    if [ -z "$LOCAL_BIN" ]; then
+        if which flutter >/dev/null 2>&1; then
+            LOCAL_BIN="$(dirname "$(which flutter)")"
+        elif [ -d "$HOME/.local/share/flutter/bin" ]; then
+            LOCAL_BIN="$HOME/.local/share/flutter/bin"
+        elif [ -d /opt/flutter/bin ]; then
+            LOCAL_BIN="/opt/flutter/bin"
+        else
+            LOCAL_BIN=~/.local/share/flutter/bin
+        fi
+    fi
 
     cd compositor_dart
     $LOCAL_BIN/flutter clean

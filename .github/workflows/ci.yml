@@ -38,8 +38,7 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 
     steps:
       - name: Install Git and setup environment
@@ -70,14 +69,14 @@ jobs:
 
       - name: Install Flutter SDK
         run: |
-          curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz | tar -xJ -C /opt
-          git config --global --add safe.directory /opt/flutter
-          /opt/flutter/bin/flutter precache --linux
-          echo "/opt/flutter/bin" >> $GITHUB_PATH
+          mkdir -p ~/.local/share
+          curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz | tar -xJ -C ~/.local/share
+          git config --global --add safe.directory "$HOME/.local/share/flutter"
+          "$HOME/.local/share/flutter/bin/flutter" precache --linux
 
       - name: Build Sparrow (Release)
         run: |
-          export PATH="/opt/flutter/bin:$PATH"
+          export PATH="$HOME/.local/share/flutter/bin:$PATH"
           flutter --version
           ./build.sh release
 
@@ -88,6 +87,7 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: 1
           SPARROW_NO_REALTIME: 1
         run: |
+          export PATH="$HOME/.local/share/flutter/bin:$PATH"
           ./tools/bot/sparrow_bot.sh --headless --duration=10
 
       - name: Upload Test Logs
