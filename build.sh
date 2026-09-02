@@ -354,6 +354,12 @@ function build_out() {
         if [ -n "$HOST_PATH" ] && [ -f "$HOST_PATH/libflutter_engine.so" ]; then
             cp -rfp "$HOST_PATH/libflutter_engine.so" out/shell/lib/
             echo -e "Installed custom engine (from $HOST_PATH) into out/shell/lib/\n"
+        elif [ -f subprojects/flutter_embedder/libflutter_engine.so ]; then
+            cp -rfp subprojects/flutter_embedder/libflutter_engine.so out/shell/lib/
+            echo -e "Installed official embedder engine into out/shell/lib/\n"
+        elif [ -f build/subprojects/flutter_embedder/libflutter_engine.so ]; then
+            cp -rfp build/subprojects/flutter_embedder/libflutter_engine.so out/shell/lib/
+            echo -e "Installed official embedder engine into out/shell/lib/\n"
         else
             echo -e "No custom engine specified via --host-path; dynamic linker will fallback to system library.\n"
         fi

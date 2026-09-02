@@ -98,6 +98,14 @@ if [ "$PGO_MODE" = true ]; then
     rm -f "$LLVM_PROFILE_FILE"
 fi
 
+# Runtime environment setup
+if [ -z "$XDG_RUNTIME_DIR" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+    export XDG_RUNTIME_DIR="/tmp/sparrow-runtime-$$"
+    mkdir -p "$XDG_RUNTIME_DIR"
+    chmod 0700 "$XDG_RUNTIME_DIR"
+fi
+export LD_LIBRARY_PATH="${OUT_DIR}/shell/lib:${ROOT_DIR}/subprojects/flutter_embedder:${LD_LIBRARY_PATH}"
+
 # 2. Launch Sparrow
 echo -e "${CYAN}[1/4] Starting Sparrow compositor...${NC}"
 "$SPARROW_BIN" --no-realtime > "$LOG_FILE" 2>&1 &
@@ -108,15 +116,19 @@ cleanup() {
         kill -TERM "$SPARROW_PID" 2>/dev/null || true
         wait "$SPARROW_PID" 2>/dev/null || true
     fi
+    if [[ "$XDG_RUNTIME_DIR" == /tmp/sparrow-runtime-* ]]; then
+        rm -rf "$XDG_RUNTIME_DIR"
+    fi
 }
 trap cleanup EXIT INT TERM
 
 # Wait for socket and parse the WAYLAND_DISPLAY allocated by Sparrow
 SPARROW_DISPLAY=""
+RUNTIME_PATH="${XDG_RUNTIME_DIR:-/run/user/$UID}"
 for _ in $(seq 1 60); do
     if grep -F "Running Wayland compositor on WAYLAND_DISPLAY=" "$LOG_FILE" >/dev/null 2>&1; then
         SPARROW_DISPLAY=$(grep -oP 'Running Wayland compositor on WAYLAND_DISPLAY=\K\S+' "$LOG_FILE" | head -n 1)
-        if [ -n "$SPARROW_DISPLAY" ] && [ -S "/run/user/$UID/$SPARROW_DISPLAY" ]; then
+        if [ -n "$SPARROW_DISPLAY" ] && [ -S "$RUNTIME_PATH/$SPARROW_DISPLAY" ]; then
             break
         fi
     fi
@@ -126,7 +138,7 @@ for _ in $(seq 1 60); do
     sleep 0.1
 done
 
-if [ -z "$SPARROW_DISPLAY" ] || [ ! -S "/run/user/$UID/$SPARROW_DISPLAY" ]; then
+if [ -z "$SPARROW_DISPLAY" ] || [ ! -S "$RUNTIME_PATH/$SPARROW_DISPLAY" ]; then
     echo -e "${RED}[FAIL] Sparrow failed to initialize Wayland socket within 6s.${NC}"
     echo "Log output:"
     cat "$LOG_FILE"
