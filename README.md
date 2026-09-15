@@ -68,7 +68,7 @@ Make sure you have the required development libraries installed:
 - `wayland-protocols`, `libwayland(devel)`
 - `libdrm(devel)`, `libinput(devel)`, `libxkbcommon(devel)`, `libpixman(devel)`
 - `libegl(devel)`, `libgles2(devel)`, `libgbm(devel)`, `libdisplay-info(devel)`
-- `vulkan(devel)` / `vulkan-headers` / `libvulkan-dev` (for Vulkan Wayland runner & Impeller backend)
+- `vulkan(devel)` / `vulkan-headers` / `libvulkan(devel)` (for Vulkan Wayland runner & Impeller backend)
 - Flutter SDK (on `PATH`)
 
 - `wlrctl` and one of the following terminal emulators may be required during the build process:
@@ -252,16 +252,31 @@ Run the compiled executable located in `./out/sparrow`:
 
 ---
 
-## ⌨️ Runtime Hotkeys & CLI Options
+## ⌨️ Runtime configuration, Hotkeys & CLI Options
+
+### INI configuration file
+Sparrow uses an INI file for runtime configuration. The file is located at `~/.config/sparrow/sparrow.ini`.
+
+```ini
+[Theme]
+wallpaper = [PATH_TO_YOUR_IMAGE] (ex. /home/username/Pictures/image.png)
+
+[Commands]
+launcher = [YOUR_LAUNCHER_APPLICATION]
+terminal = [YOUR_TERMINAL_APPLICATION] (ex. alacritty or foot or kitty or weston-terminal or xterm)
+logout = [YOUR_LOGOUT_APPLICATION] (ex. wayland-logout)
+```
+
+**NOTE**: Due to the fact that Sparrow does not yet support the layer-shell protocol, the `launcher` must not be set to an application that requires layer-shell to be able to run.
 
 ### Interactive Hotkeys
 | Hotkey | Feature | Description |
 | :---: | :--- | :--- |
-| **`Ctrl` + `Alt` + `Suppr`** | **Logout** | Log out the compositor |
-| **`Super`** | **Application Launcher** | Launches the prefered application launcher. |
+| **`Ctrl` + `Alt` + `Suppr`** | **Logout** | Launches the logout command defined in `sparrow.ini` (see `[Commands].logout` field). |
+| **`Super`** | **Application Launcher** | Launches the application launcher defined in `sparrow.ini` (see `[Commands].launcher` field). |
 | **`Alt Left`** | **Overview Mode** | Toggles show/hide overview of all running applications in a carousel-like view. |
 | **`Super` + `Q`** | **Quit Application** | Closes the focused window or application. |
-| **`Super` + `Enter`** | **Terminal Launcher** | Launches the prefered terminal emulator. |
+| **`Super` + `Enter`** | **Terminal Launcher** | Launches the terminal emulator defined in `sparrow.ini` (see `[Commands].terminal` field). |
 | **`Super` + `Scroll`** | **Desktop Zoom In / Out** | Continuous screen zoom centered smoothly on the cursor. |
 | **`Super` + `+/-`** | **Desktop Zoom Step** | Increments or decrements the screen magnification level. |
 | **`Super` + `0`** | **Reset Desktop Zoom** | Smoothly resets desktop magnification back to 1.0x (100%). |
@@ -399,8 +414,10 @@ Sparrow is an independent Wayland compositor built with Flutter and wlroots. It 
 - **[flutter-elinux](https://github.com/sony/flutter-elinux) & [ivi-homescreen](https://github.com/toyota-connected/ivi-homescreen)**: engine & Wayland integration approaches.
 - **[wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)**: Pluggable, composable Wayland compositor library powering the low-level compositor core.
 - **[niri](https://github.com/niri-wm/niri)**: Wayland compositor architectural inspiration.
+- **[Weston](https://gitlab.freedesktop.org/wayland/weston)**: Wayland reference implementation.
+- **[Sway](https://github.com/swaywm/sway)**: Wlroots reference implementation.
 
-- **[Android](https://source.android.com/)**: main inspiration...
+- **[Android](https://source.android.com/) & [Chrome OS](https://opensource.google/projects/chromiumos)**: main inspiration...
 
 ---
 
