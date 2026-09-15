@@ -2,12 +2,9 @@ import 'package:flutter/foundation.dart';
 
 @immutable
 class GestureSwipeBeginEvent {
-  const GestureSwipeBeginEvent({
-    required this.fingers,
-    required this.timeMsec,
-  });
+  const new({required this.fingers, required this.timeMsec});
 
-  factory GestureSwipeBeginEvent.fromJson(Map<String, dynamic> json) {
+  factory fromJson(Map<String, dynamic> json) {
     return GestureSwipeBeginEvent(
       fingers: (json['fingers'] as num?)?.toInt() ?? 3,
       timeMsec: (json['time_msec'] as num?)?.toInt() ?? 0,
@@ -20,13 +17,9 @@ class GestureSwipeBeginEvent {
 
 @immutable
 class GestureSwipeUpdateEvent {
-  const GestureSwipeUpdateEvent({
-    required this.dx,
-    required this.dy,
-    required this.timeMsec,
-  });
+  const new({required this.dx, required this.dy, required this.timeMsec});
 
-  factory GestureSwipeUpdateEvent.fromJson(Map<String, dynamic> json) {
+  factory fromJson(Map<String, dynamic> json) {
     return GestureSwipeUpdateEvent(
       dx: (json['dx'] as num?)?.toDouble() ?? 0.0,
       dy: (json['dy'] as num?)?.toDouble() ?? 0.0,
@@ -41,12 +34,9 @@ class GestureSwipeUpdateEvent {
 
 @immutable
 class GestureSwipeEndEvent {
-  const GestureSwipeEndEvent({
-    required this.cancelled,
-    required this.timeMsec,
-  });
+  const new({required this.cancelled, required this.timeMsec});
 
-  factory GestureSwipeEndEvent.fromJson(Map<String, dynamic> json) {
+  factory fromJson(Map<String, dynamic> json) {
     return GestureSwipeEndEvent(
       cancelled: json['cancelled'] == true || json['cancelled'] == 1,
       timeMsec: (json['time_msec'] as num?)?.toInt() ?? 0,

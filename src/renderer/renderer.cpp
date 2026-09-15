@@ -130,6 +130,7 @@ static void texture_destruction_callback(void *user_data)
 
 static struct sparrow_renderer_page_texture *page_get_texture(size_t width, size_t height, bool make_fbo)
 {
+    SPARROW_TRACE_SCOPE("gpu", "page_get_texture");
     Core *instance = Core::instance();
 
     if (instance == nullptr)
@@ -264,6 +265,7 @@ static bool create_backing_store(const FlutterBackingStoreConfig *config,
     FlutterBackingStore *backing_store_out,
     void *user_data)
 {
+    SPARROW_TRACE_SCOPE("render", "Flutter::create_backing_store");
 #ifdef ENABLE_IMPELLER
     struct sparrow_renderer_page_texture *page_texture =
         page_get_texture(config->size.width, config->size.height, true);
@@ -376,6 +378,7 @@ static bool collect_backing_store(const FlutterBackingStore *backing_store,
 static bool present_layers(const FlutterLayer **f_layers, size_t layers_count,
     void *user_data)
 {
+    SPARROW_TRACE_SCOPE("render", "Flutter::present_layers");
     Core *instance = Core::instance();
     struct sparrow_renderer *renderer = &instance->sparrow_renderer;
 
@@ -1218,7 +1221,8 @@ static void render_surface_rounded_iterator(struct wlr_surface *surface, int sx,
 
     if (render_data->output_transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&dst_box, &dst_box, render_data->output_transform,
+        wlr_box_transform(&dst_box, &dst_box,
+            wlr_output_transform_invert(render_data->output_transform),
             render_data->viewport_width,
             render_data->viewport_height);
     }
@@ -1401,7 +1405,8 @@ static void render_surface_iterator(struct wlr_surface *surface, int sx, int sy,
 
     if (render_data->output_transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&dst_box, &dst_box, render_data->output_transform,
+        wlr_box_transform(&dst_box, &dst_box,
+            wlr_output_transform_invert(render_data->output_transform),
             render_data->viewport_width,
             render_data->viewport_height);
     }
@@ -1469,7 +1474,7 @@ static void render_scene_layer_platform(struct wlr_render_pass *render_pass,
     SparrowView *v    = nullptr;
     wl_list_for_each(v, &instance->views_list, link)
     {
-        if (v && (v->handle == view_handle))
+        if (v->handle == view_handle)
         {
             view = v;
             break;
@@ -2018,6 +2023,7 @@ static const struct wlr_addon_interface dmabuf_buffer_addon_impl = {
 bool sparrow_renderer_import_dmabuf_buffer(struct wlr_buffer *source_buffer,
     FlutterOpenGLTexture *texture_out)
 {
+    SPARROW_TRACE_SCOPE("gpu", "import_dmabuf_buffer");
     if (!source_buffer || !texture_out)
     {
         return false;
@@ -2182,6 +2188,7 @@ bool sparrow_renderer_import_dmabuf_buffer(struct wlr_buffer *source_buffer,
 bool sparrow_renderer_import_surface_dmabuf(const struct wlr_surface *surface,
     FlutterOpenGLTexture *texture_out)
 {
+    SPARROW_TRACE_SCOPE("gpu", "import_surface_dmabuf");
     if (!surface || !surface->buffer || !surface->buffer->source)
     {
         return false;
@@ -2255,7 +2262,8 @@ static void render_scene_layer_texture(struct wlr_render_pass *render_pass,
     struct wlr_box phys_box = log_box;
     if (viewport->transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&phys_box, &log_box, viewport->transform, output_width,
+        wlr_box_transform(&phys_box, &log_box,
+            wlr_output_transform_invert(viewport->transform), output_width,
             output_height);
     }
 
@@ -2347,6 +2355,8 @@ void sparrow_renderer_render_scene(struct wlr_render_pass *render_pass,
     struct sparrow_output_viewport *viewport,
     pixman_region32_t *damage_region)
 {
+    SPARROW_TRACE_SCOPE("render", "sparrow_renderer_render_scene");
+    SPARROW_GL_SCOPE("sparrow_renderer_render_scene");
     Core *instance = Core::instance();
 
     struct sparrow_renderer *renderer = &instance->sparrow_renderer;
@@ -2402,7 +2412,7 @@ void sparrow_renderer_update_scene_positions()
     SparrowView *view = nullptr;
     wl_list_for_each(view, &instance->views_list, link)
     {
-        if (!view || (view->scene_tree == nullptr))
+        if (view->scene_tree == nullptr)
         {
             continue;
         }

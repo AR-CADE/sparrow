@@ -101,8 +101,6 @@ mixin PointerEventEncoder {
       eventType = pointerUnknownEvent;
     }
 
-    //print('event: ${event.toString()}');
-
     // Apply coordinate transformation if provided, otherwise pass through
     final localPos = coordTransform != null
         ? coordTransform(event.localPosition)

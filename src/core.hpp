@@ -27,6 +27,8 @@ class SparrowView;
 class SparrowSubSurface;
 class SparrowPopup;
 
+#include <flutter/platform/pigeon/messages.h>
+
 class Core
 {
   private:
@@ -38,7 +40,7 @@ class Core
 
   public:
     static Core *instance();
-    int init(sparrow_options opts, bool allow_root);
+    int init(const sparrow_options & opts, bool allow_root);
     ~Core();
 
     // View lookup helpers
@@ -251,7 +253,8 @@ class Core
 
     BinaryMessenger messenger{};
     std::unique_ptr<IncomingMessageDispatcher> message_dispatcher;
-    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> wlroots_channel;
+    std::unique_ptr<sparrow::CompositorHostApi> pigeon_host_api;
+    std::unique_ptr<sparrow::CompositorFlutterApi> pigeon_flutter_api;
 
     FlutterCustomTaskRunners task_runners{};
 
@@ -260,6 +263,8 @@ class Core
     std::unique_ptr<DebounceTime<std::string>> axis_debouncer = nullptr;
     bool axis_debouncer_ready = false;
     std::atomic<bool> force_render_all_views{false};
+
+    class IpcServer *ipc_server = nullptr;
 };
 
 #endif

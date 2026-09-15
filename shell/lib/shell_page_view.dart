@@ -22,7 +22,7 @@ import 'package:shell/core.dart'
 import 'package:shell/surface_page.dart' show SurfacePage;
 
 class ShellPageView extends StatelessWidget {
-  const ShellPageView({
+  const new({
     required this.animationController,
     required this.handlePageViewChanged,
     required this.toggleOverview,
@@ -52,9 +52,7 @@ class ShellPageView extends StatelessWidget {
     final pageview = PageView.builder(
       scrollBehavior: const CustomScrollBehavior(),
       physics: fraction == minFraction
-          ? const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
-            )
+          ? const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics())
           : const NeverScrollableScrollPhysics(),
       pageSnapping: fraction != minFraction,
       controller: pageController,
@@ -68,7 +66,8 @@ class ShellPageView extends StatelessWidget {
         }
 
         final currentPageIndex = pageController.hasClients
-            ? pageController.page?.round() ?? pageController.initialPage
+            ? (pageController.page?.round() ?? pageController.initialPage)
+                  .clamp(0, surfaces.isNotEmpty ? surfaces.length - 1 : 0)
             : pageController.initialPage;
 
         final isCurrent = currentPageIndex == index;
@@ -85,7 +84,6 @@ class ShellPageView extends StatelessWidget {
           closeOverview: closeOverview,
           openOverview: openOverview,
           controller: animationController,
-          // overlayController: overlayController,
           toggleOverview: toggleOverview,
           child: SurfacePage(
             toggleOverview: toggleOverview,
@@ -98,8 +96,6 @@ class ShellPageView extends StatelessWidget {
       },
     );
 
-    return SizedBox.expand(
-      child: pageview,
-    );
+    return SizedBox.expand(child: pageview);
   }
 }

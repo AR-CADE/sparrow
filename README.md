@@ -34,12 +34,14 @@ Sparrow is a modern, high-performance Wayland compositor featuring a unique **hy
   Hardware DRM/GBM swapchain with 3+ buffer rotation combined with a 3-frame historical damage ring (`NUM_DAMAGE_HISTORY 3`). Eliminates VSync backpressure stalls and micro-stuttering under high GPU/CPU load while Late-Latching guarantees that games and video surfaces always sample the freshest available committed frame with minimal input latency.
 - **🎯 Precise Damage Tracking & Damage History**:
   Maintains a 4-frame damage ring buffer. Only regions that actually change on screen are redrawn and swapped, reducing GPU and power consumption to minimum.
-- **🎮 Gaming & Subsurfaces First-Class Support**:
-  Full support for complex multi-surface hierarchies including `wl_subsurface` (CEMU, RPCS3, mpv) and `xdg_popup` menus.
 - **🖥️ XWayland-satellite Support**:
   Transparent execution and management of legacy X11 applications alongside native Wayland clients.
+- **🕊️ Strongly-Typed Pigeon Embedder IPC**:
+  All communications between the C++ wlroots server and Flutter are generated via Flutter **Pigeon**.
 - **✨ Fluid UI & Flutter Ecosystem**:
   Leverages the full expressive power of Flutter (custom shaders, smooth spring animations, rich widget library, vector graphics).
+- **🔍 Smooth Full-Desktop Zoom**:
+  Butter-smooth desktop screen magnifier.
 - **🛠️ Built-in Real-Time Diagnostics & Profiling**:
   - **FPS & Frame Latency OSD** (`F11` / `--fps`): Real sliding-window client commit measurement and render frame latency.
   - **Surface Tree Inspector** (`F10` / `--inspect`): Instant colorized ASCII dump of all active outputs, toplevels, subsurfaces, and popups.
@@ -63,10 +65,18 @@ Sparrow bridges the low-level Linux graphics stack with the Flutter reactive UI 
 Make sure you have the required development libraries installed:
 - `clang` / `clang++` (C++26 support)
 - `meson` & `ninja`
-- `wayland-protocols`, `libwayland-dev`
-- `libdrm-dev`, `libinput-dev`, `libxkbcommon-dev`, `libpixman-1-dev`
-- `libegl-dev`, `libgles2-mesa-dev`, `libgbm-dev`, `libdisplay-info-dev`
+- `wayland-protocols`, `libwayland(devel)`
+- `libdrm(devel)`, `libinput(devel)`, `libxkbcommon(devel)`, `libpixman(devel)`
+- `libegl(devel)`, `libgles2(devel)`, `libgbm(devel)`, `libdisplay-info(devel)`
 - Flutter SDK (on `PATH`)
+
+- `wlrctl` and one of the following terminal emulators may be required during the build process:
+  - `alacritty` 
+  - `foot` 
+  - `kitty` 
+  - `weston-terminal` 
+  - `xterm`
+
 
 ### Build Commands
 Use the universal `./build.sh` script to build the project:
@@ -93,7 +103,10 @@ Use the universal `./build.sh` script to build the project:
 ./build.sh tsan        # ThreadSanitizer
 ./build.sh valgrind    # Valgrind memory detector
 
-# 7. Clean build artifacts
+# 7. Regenerate Pigeon C++ and Dart message bindings
+./build.sh pigeon
+
+# 8. Clean build artifacts
 ./build.sh clean
 ```
 
@@ -243,6 +256,19 @@ Run the compiled executable located in `./out/sparrow`:
 ### Interactive Hotkeys
 | Hotkey | Feature | Description |
 | :---: | :--- | :--- |
+| **`Ctrl` + `Alt` + `Suppr`** | **Logout** | Log out the compositor |
+| **`Super`** | **Application Launcher** | Launches the prefered application launcher. |
+| **`Alt Left`** | **Overview Mode** | Toggles show/hide overview of all running applications in a carousel-like view. |
+| **`Super` + `Q`** | **Quit Application** | Closes the focused window or application. |
+| **`Super` + `Enter`** | **Terminal Launcher** | Launches the prefered terminal emulator. |
+| **`Super` + `Scroll`** | **Desktop Zoom In / Out** | Continuous screen zoom centered smoothly on the cursor. |
+| **`Super` + `+/-`** | **Desktop Zoom Step** | Increments or decrements the screen magnification level. |
+| **`Super` + `0`** | **Reset Desktop Zoom** | Smoothly resets desktop magnification back to 1.0x (100%). |
+| **`Ctrl` + `Left/Right`** | **Navigation** | Moves selection to the next/previous application in the list. |
+| **`Left/Right`** | **Navigation (overview mode only)** | Moves selection to the next/previous application in the list. |
+| **`Space` or `Enter` or `Alt Left`** | **Navigation (overview mode only)** | Close the overview mode. and select the current focused view. |
+| **`F6`** | **Perfetto Trace Toggle** | Toggles on/off the in-process Perfetto trace recording to `out/sparrow.pftrace`. |
+| **`F7`** | **RenderDoc Frame Capture** | Triggers an immediate frame capture via the RenderDoc in-application API (`renderdoc_app.h`). |
 | **`F8`** | **DPMS Power Toggle** | Toggles the monitor power state (ON/OFF) for the primary display. This is useful for testing sleep/resume behavior and power management capabilities. |
 | **`F9`** | **Buffering Mode Switcher** | Cycles through `Double Buffering (DB)` ➔ `Dynamic Triple Buffering (AUTO)` ➔ `Forced Triple Buffering (TB:ON)`. |
 | **`F10`** | **Surface Tree Inspector** | Dumps the complete hierarchy (Outputs, Views, Subsurfaces, Popups, PIDs, formats) into the terminal. |
@@ -252,6 +278,8 @@ Run the compiled executable located in `./out/sparrow`:
 ### Command Line Options
 | Flag | Short | Environment Variable | Description |
 | :--- | :---: | :--- | :--- |
+| `--trace-perfetto[=file]` | | `SPARROW_TRACE_PERFETTO=file` | Starts in-process Perfetto trace recording (default: `out/sparrow.pftrace`) |
+| `--renderdoc-capture[=N]` | | `RENDERDOC_CAPFILE=path` | Triggers RenderDoc frame capture at frame N (or on F7) |
 | `--triple-buffer` | `-3` | `SPARROW_BUFFERING=triple` | Forces Triple Buffering for maximum gaming throughput |
 | `--auto-buffer` | | `SPARROW_BUFFERING=auto` | Enables Dynamic Triple Buffering (adapts to GPU load) |
 | `--double-buffer` | `-2` | `SPARROW_BUFFERING=double` | Uses Double Buffering for minimum input latency (default) |
@@ -268,41 +296,91 @@ Run the compiled executable located in `./out/sparrow`:
 
 ---
 
+## 🔬 GPU & Performance Tracing (Perfetto & RenderDoc)
+
+Sparrow includes an in-process, privilege-free profiling system using **Google Perfetto** and **RenderDoc**:
+- **Zero Overhead in Release**: All tracing logic is guarded by `#if defined(SPARROW_ENABLE_TRACE)`. In standard release builds (`./build.sh release`), tracing is completely compiled out with zero runtime overhead, zero binary bloat, and zero symbols.
+- **In-Process Tracing**: Does **not** require `sudo`, root privileges, or external kernel daemon setup.
+- **Visual Analysis**: Directly compatible with [https://ui.perfetto.dev](https://ui.perfetto.dev).
+
+### 1. Building with Tracing Enabled
+```bash
+./build.sh trace server
+```
+
+### 2. Automated Profiling Harness
+Run an automated profiling session with synthetic workloads and validation:
+```bash
+# Profile for 5 seconds and generate out/sparrow_profile.pftrace
+./tools/bot/profile_gpu.sh --duration=5
+
+# Headless mode (e.g. on CI / server without monitor)
+./tools/bot/profile_gpu.sh --duration=5 --headless
+
+# With custom Flutter app bundle
+./tools/bot/profile_gpu.sh --duration=10 --app=out/demo_app
+```
+
+### 3. Interactive Tracing & RenderDoc Capture
+```bash
+# Start Sparrow with Perfetto trace enabled
+./out/sparrow --trace-perfetto=out/sparrow.pftrace
+
+# While running:
+# - Press F6: Toggle Perfetto trace recording
+# - Press F7: Trigger an immediate RenderDoc frame capture
+```
+
+### 4. Viewing Traces
+1. Open **[https://ui.perfetto.dev](https://ui.perfetto.dev)** in Google Chrome or Chromium.
+2. Drag and drop `out/sparrow_profile.pftrace` into the browser window.
+3. Inspect tracks:
+   - `gpu`: Buffer imports, texture allocations, DMA-BUF bindings.
+   - `compositor`: Output render passes, VBlank commits, XDG commits.
+   - `render`: Flutter backing store allocation and layer presentation.
+   - `ipc`: JSON-RPC client requests and broadcasts.
+
+---
+
 ## 🛡️ Sanitizers & Memory Safety Testing
 
 Sparrow includes native build modes and configurations for Sanitizers to validate memory safety, thread concurrency, and prevent regressions:
 
 ### 1. AddressSanitizer & LeakSanitizer (ASan / LSan)
-Detects buffer overflows, use-after-free, and memory leaks on shutdown:
+Detects buffer overflows, use-after-free, and memory leaks on shutdown (utilizes `lsan_suppressions.txt` to suppress external uninstrumented driver leaks):
 ```bash
 ./build.sh asan server
-ASAN_OPTIONS="symbolize=1:detect_leaks=1:abort_on_error=0:allocator_may_return_null=1:fast_unwind_on_malloc=0" ./out/sparrow &> sparrow-nested-asan.log
+LSAN_OPTIONS="suppressions=lsan_suppressions.txt" ASAN_OPTIONS="symbolize=1:detect_leaks=1:abort_on_error=0:allocator_may_return_null=1:fast_unwind_on_malloc=1" ./out/sparrow &> sparrow-asan.log
 ```
 
 ### 2. UndefinedBehaviorSanitizer (UBSan)
-Detects integer overflows, alignment issues, and null dereferences:
+Detects integer overflows, alignment issues, and null dereferences (utilizes `ubsan_suppressions.txt`):
 ```bash
 ./build.sh ubsan server
-UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1:symbolize=1" ./out/sparrow &> sparrow-nested-ubsan.log
+UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1:symbolize=1:suppressions=ubsan_suppressions.txt" ./out/sparrow &> sparrow-ubsan.log
 ```
 
 ### 3. ThreadSanitizer (TSan)
 Detects data races between Wayland event dispatching and Flutter rasterizer threads (utilizes `tsan_suppressions.txt` to filter uninstrumented GPU driver background compiler threads):
 ```bash
 ./build.sh tsan server
-TSAN_OPTIONS="report_signal_unsafe=0 symbolize=1 history_size=7 suppressions=tsan_suppressions.txt" ./out/sparrow &> sparrow-nested-tsan.log
+TSAN_OPTIONS="report_signal_unsafe=0:symbolize=1:history_size=7:suppressions=tsan_suppressions.txt" ./out/sparrow &> sparrow-tsan.log
 ```
 
 ---
 
 ## 🗺️ Next Steps & Roadmap
-- **`wlr_layer_shell_v1`**: Integration of desktop panels, docks, wallpapers, and lockscreens.
-- **`Multi-Monitor Support`**: Dynamic display attachment and per-output scale configurations.
+- **`Multi-Monitor Support`**: Dynamic display attachment and per-output scale configurations (including refresh rates).
 - **`ARM64/AArch64 Support`**: allow sparrow to run on ARM64 (obviously Armel will not be supported...).
-- **Vulkan Backend**: add support for Vulkan backend to Flutter.
-- **Software Rendering**: add support for software rendering to Flutter.
-- **Tiling Support**: add support for tiling window manager (up to 2 applications per tile).
-- **GPU Reset**: add support for GPU reset.
+- **`Vulkan Support`**: add support for Vulkan backend to Flutter.
+- **`Software Rendering`**: add support for software rendering to Flutter.
+- **`Simple Tiling`**: add support for a very basic tiling layout (up to 2 applications).
+- **`GPU Reset`**: add support for GPU reset.
+- **`wlr_layer_shell_v1 (partial support)`**: Integration of background, toplevel, and overlay layer are scheduled (some features like exclusive zones might not be supported, in the near future, or not at all...).
+- **`animated screen rotation`**: add smooth, animate screen rotation based on accelerometer/gyroscope.
+- **`virtual keyboard`**: show up a virtual keyboard when the focus is on a text input field of an application in tablet mode. 
+
+
 ---
 
 ## 📄 License
@@ -317,8 +395,11 @@ Sparrow is an independent Wayland compositor built with Flutter and wlroots. It 
 - **[flutter_wlroots](https://github.com/FlutterWayland/flutter_wlroots)**: Initial proof-of-concept inspiration; foundational Dart bindings in `compositor_dart` were derived from this work ([License](doc/LICENSE_FLUTTER_WLROOTS)).
 - **[Zenith](https://github.com/roscale/zenith)**: Architectural inspiration for Flutter desktop shell and compositor integration ([License](doc/LICENSE_ZENITH)).
 - **[Wayfire](https://github.com/WayfireWM/wayfire)**: Compositor design patterns and C++ wlroots wrapping headers (`src/api/sparrow/nonstd/wlroots*.hpp`).
-- **[flutter-elinux](https://github.com/sony/flutter-elinux) & IVI**: Embedded Linux and automotive Wayland compositor concepts and engine integration approaches.
+- **[flutter-elinux](https://github.com/sony/flutter-elinux) & [ivi-homescreen](https://github.com/toyota-connected/ivi-homescreen)**: engine & Wayland integration approaches.
 - **[wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)**: Pluggable, composable Wayland compositor library powering the low-level compositor core.
+- **[niri](https://github.com/niri-wm/niri)**: Wayland compositor architectural inspiration.
+
+- **[Android](https://source.android.com/)**: main inspiration...
 
 ---
 

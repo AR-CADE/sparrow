@@ -1,6 +1,8 @@
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:compositor_dart/data/repositories/compositor/compositor_repository.dart'
     show CompositorRepository;
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/services.dart' show MethodChannel;
+import 'package:flutter/widgets.dart' show FocusManager;
 import 'package:material_ui/material_ui.dart'
     show
         BuildContext,
@@ -19,7 +21,7 @@ import 'package:material_ui/material_ui.dart'
 import 'package:shell/core.dart' show surfaces;
 
 class NavigationControllerWidget extends StatelessWidget {
-  const NavigationControllerWidget({
+  const new({
     required this.toggleOverview,
     required this.onUpdateCurrentPageIndex,
     required this.pageController,
@@ -48,7 +50,10 @@ class NavigationControllerWidget extends StatelessWidget {
               Icons.auto_awesome_motion,
               color: Colors.white,
             ),
-            onPressed: toggleOverview,
+            onPressed: () async {
+              FocusManager.instance.primaryFocus?.unfocus();
+              await toggleOverview();
+            },
           ),
         ),
         Padding(
@@ -60,12 +65,9 @@ class NavigationControllerWidget extends StatelessWidget {
                 Colors.black.withAlpha(60),
               ),
             ),
-            icon: const Icon(
-              size: 28,
-              Icons.arrow_back,
-              color: Colors.white,
-            ),
+            icon: const Icon(size: 28, Icons.arrow_back, color: Colors.white),
             onPressed: () async {
+              FocusManager.instance.primaryFocus?.unfocus();
               final currentPageIndex = pageController.hasClients
                   ? pageController.page?.round() ?? pageController.initialPage
                   : 0;
@@ -91,6 +93,7 @@ class NavigationControllerWidget extends StatelessWidget {
               color: Colors.white,
             ),
             onPressed: () async {
+              FocusManager.instance.primaryFocus?.unfocus();
               final currentPageIndex = pageController.hasClients
                   ? pageController.page?.round() ?? pageController.initialPage
                   : 0;
@@ -111,18 +114,13 @@ class NavigationControllerWidget extends StatelessWidget {
                   Colors.black.withAlpha(60),
                 ),
               ),
-              icon: const Icon(
-                size: 28,
-                Icons.add,
-                color: Colors.white,
-              ),
+              icon: const Icon(size: 28, Icons.add, color: Colors.white),
               onPressed: () async {
+                FocusManager.instance.primaryFocus?.unfocus();
                 try {
-                  await CompositorRepository()
-                      .platform
-                      .channel
+                  await const MethodChannel('wlroots')
                       .invokeMethod('mock_spawn_surface');
-                } catch (_) {}
+                } on Exception catch (_) {}
               },
             ),
           ),
@@ -135,12 +133,13 @@ class NavigationControllerWidget extends StatelessWidget {
                 Colors.black.withAlpha(60),
               ),
             ),
-            icon: Icon(
+            icon: const Icon(
               size: 28,
               kDebugMode ? Icons.remove : Icons.close,
               color: Colors.white,
             ),
             onPressed: () async {
+              FocusManager.instance.primaryFocus?.unfocus();
               final currentPageIndex = pageController.hasClients
                   ? pageController.page?.round() ?? pageController.initialPage
                   : 0;

@@ -28,16 +28,13 @@ Future<void> main(List<String> args) async {
 }
 
 class ShellApp extends StatelessWidget {
-  const ShellApp({super.key});
+  const new({super.key});
 
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
       scrollBehavior: CustomScrollBehavior(),
-      home: Scaffold(
-        backgroundColor: Colors.black,
-        body: Shell(),
-      ),
+      home: Scaffold(backgroundColor: Colors.black, body: Shell()),
     );
   }
 }

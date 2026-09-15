@@ -23,7 +23,7 @@
 #include "surface/surface.hpp"
 #include "surface/view.hpp"
 
-static std::vector<std::shared_ptr<touch_point>> _touch_event;
+static std::vector<std::shared_ptr<touch_point>> s_touch_events;
 
 SparrowView *seat_get_focus()
 {
@@ -41,7 +41,7 @@ SparrowView *seat_get_focus()
 
 std::shared_ptr<touch_point> seat_touch_point_add(int32_t id)
 {
-    for (auto it = _touch_event.begin(); it != _touch_event.end();)
+    for (auto it = s_touch_events.begin(); it != s_touch_events.end();)
     {
         auto point = *it;
         if (point->id == id)
@@ -54,20 +54,20 @@ std::shared_ptr<touch_point> seat_touch_point_add(int32_t id)
     }
 
     auto point = std::make_shared<touch_point>(id);
-    _touch_event.push_back(point);
+    s_touch_events.push_back(point);
 
     return point;
 }
 
 void seat_touch_point_delete(int32_t id)
 {
-    for (auto it = _touch_event.begin(); it != _touch_event.end();)
+    for (auto it = s_touch_events.begin(); it != s_touch_events.end();)
     {
         auto point = *it;
 
         if (point->id == id)
         {
-            it = _touch_event.erase(it);
+            it = s_touch_events.erase(it);
         } else
         {
             ++it;
@@ -77,7 +77,7 @@ void seat_touch_point_delete(int32_t id)
 
 std::shared_ptr<touch_point> seat_touch_point_get(int32_t id)
 {
-    for (auto it = _touch_event.begin(); it != _touch_event.end();)
+    for (auto it = s_touch_events.begin(); it != s_touch_events.end();)
     {
         auto point = *it;
 
@@ -175,7 +175,11 @@ int64_t seat_flutter_button_mask_from_linux(uint32_t button)
 
 uint64_t seat_get_flutter_timestamp(uint32_t wl_time_msec)
 {
-    (void)wl_time_msec;
+    if (wl_time_msec != 0)
+    {
+        return (uint64_t)wl_time_msec * 1000ULL;
+    }
+
     Core *instance = Core::instance();
     if (instance && instance->engine && instance->embedder_api.GetCurrentTime)
     {
@@ -244,12 +248,12 @@ void sparrow_seat_update_capabilities()
     }
 }
 
-#define TOUCHPAD_CLICK_METHOD_NONE -1
+#define TOUCHPAD_CLICK_METHOD_NONE (-1)
 #define TOUCHPAD_CLICK_METHOD_DEFAULT 0
 #define TOUCHPAD_CLICK_METHOD_BUTTON_AREAS 1
 #define TOUCHPAD_CLICK_METHOD_CLICKFINGER 2
 
-#define TOUCHPAD_SCROLL_METHOD_NONE -1
+#define TOUCHPAD_SCROLL_METHOD_NONE (-1)
 #define TOUCHPAD_SCROLL_METHOD_DEFAULT 0
 #define TOUCHPAD_SCROLL_METHOD_BUTTON_AREAS 1
 #define TOUCHPAD_SCROLL_METHOD_TWO_FINGER 2
@@ -257,12 +261,12 @@ void sparrow_seat_update_capabilities()
 #define TOUCHPAD_SCROLL_METHOD_ON_BUTTON_DOWN 4
 #define TOUCHPAD_SCROLL_METHOD_CLICKFINGER 2
 
-#define TOUCHPAD_MULTI_FINGER_DRAG_NONE -1
+#define TOUCHPAD_MULTI_FINGER_DRAG_NONE (-1)
 #define TOUCHPAD_MULTI_FINGER_DRAG_DEFAULT 0
 #define TOUCHPAD_MULTI_FINGER_DRAG_3FG 1
 #define TOUCHPAD_MULTI_FINGER_DRAG_4FG 2
 
-#define LIBINPUT_ACCEL_PROFILE_NONE -1
+#define LIBINPUT_ACCEL_PROFILE_NONE (-1)
 #define LIBINPUT_ACCEL_PROFILE_DEFAULT 0
 #define LIBINPUT_ACCEL_PROFILE_ADAPTIVE 1
 #define LIBINPUT_ACCEL_PROFILE_FLAT 2
@@ -512,8 +516,6 @@ static void on_server_new_input(struct wl_listener *listener, void *data)
         break;
 
       case WLR_INPUT_DEVICE_TABLET:
-        break;
-
       default:
         break;
     }
@@ -542,8 +544,9 @@ void sparrow_seat_init()
     const char *env_cursor_size = getenv("XCURSOR_SIZE");
     if (env_cursor_size != nullptr)
     {
-        int sz = atoi(env_cursor_size);
-        if (sz > 0)
+        char *end = nullptr;
+        long sz   = strtol(env_cursor_size, &end, 10);
+        if ((end != env_cursor_size) && (sz > 0))
         {
             cursor_size = static_cast<unsigned int>(sz);
         }

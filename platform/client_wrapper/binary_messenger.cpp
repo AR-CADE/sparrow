@@ -2,6 +2,8 @@
 #include "binary_messenger.hpp"
 #include "incoming_message_dispatcher.hpp"
 
+namespace flutter
+{
 using FlutterDesktopMessengerRef = BinaryMessenger*;
 
 static bool send_message_with_reply(FlutterEngine engine, const FlutterEngineProcTable *api,
@@ -42,9 +44,7 @@ void ForwardToHandler(FlutterDesktopMessengerRef messenger,
     const FlutterPlatformMessage *message,
     void *user_data)
 {
-    auto *response_handle = message->response_handle;
-    const FlutterEngineProcTable *api = messenger->GetApi();
-    FlutterEngine engine = messenger->GetEngine();
+    auto *response_handle     = message->response_handle;
     BinaryReply reply_handler = [messenger, response_handle] (
         const uint8_t *reply,
         size_t reply_size) mutable
@@ -73,6 +73,29 @@ void ForwardToHandler(FlutterDesktopMessengerRef messenger,
         std::move(reply_handler));
 }
 
+struct BinaryMessenger::PendingReply
+{
+    BinaryMessenger *messenger = nullptr;
+    BinaryReply reply;
+};
+
+BinaryMessenger::~BinaryMessenger()
+{
+    Shutdown();
+}
+
+void BinaryMessenger::Shutdown()
+{
+    std::lock_guard<std::mutex> lock(pending_replies_mutex_);
+    for (auto *pending : pending_replies_)
+    {
+        pending->messenger = nullptr;
+        delete pending;
+    }
+
+    pending_replies_.clear();
+}
+
 void BinaryMessenger::Send(const std::string& channel,
     const uint8_t *message,
     size_t message_size,
@@ -84,26 +107,34 @@ void BinaryMessenger::Send(const std::string& channel,
         return;
     }
 
-    struct Captures
+    auto pending = new PendingReply{const_cast<BinaryMessenger*>(this), std::move(reply)};
     {
-        BinaryReply reply;
-    };
-
-    auto captures = new Captures();
-    captures->reply = reply;
+        std::lock_guard<std::mutex> lock(pending_replies_mutex_);
+        pending_replies_.insert(pending);
+    }
 
     auto message_reply = [] (const uint8_t *data, size_t data_size,
                              void *user_data)
     {
-        auto captures = reinterpret_cast<Captures*>(user_data);
-        captures->reply(data, data_size);
-        delete captures;
+        auto *pending = reinterpret_cast<PendingReply*>(user_data);
+        if (pending->messenger)
+        {
+            std::lock_guard<std::mutex> lock(pending->messenger->pending_replies_mutex_);
+            pending->messenger->pending_replies_.erase(pending);
+        }
+
+        pending->reply(data, data_size);
+        delete pending;
     };
     bool result = send_message_with_reply(engine_, api_, channel.c_str(), message, message_size,
-        message_reply, captures);
+        message_reply, pending);
     if (!result)
     {
-        delete captures;
+        {
+            std::lock_guard<std::mutex> lock(pending_replies_mutex_);
+            pending_replies_.erase(pending);
+        }
+        delete pending;
     }
 }
 
@@ -137,3 +168,4 @@ void BinaryMessenger::SetEngine(FlutterEngine engine, const FlutterEngineProcTab
     engine_ = engine;
     api_    = api;
 }
+} // namespace flutter

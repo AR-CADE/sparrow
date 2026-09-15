@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ISOLATE_H
+#define ISOLATE_H
 
 #include <cstdint>
 #include <string>
@@ -23,3 +24,5 @@ bool sparrow_isolate_register_port(const std::string& name, int64_t port_id);
  * Remove a registered SendPort name mapping from C++.
  */
 bool sparrow_isolate_remove_port(const std::string& name);
+
+#endif

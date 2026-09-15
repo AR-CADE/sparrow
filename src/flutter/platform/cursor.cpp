@@ -244,7 +244,7 @@ void sparrow_cursor_reset_to_flutter()
     Output *output = nullptr;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (output && output->wlr_output && output->wlr_output->enabled &&
+        if (output->wlr_output && output->wlr_output->enabled &&
             output->wlr_output->needs_frame)
         {
             wlr_output_schedule_frame(output->wlr_output);

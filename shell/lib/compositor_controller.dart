@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/widgets.dart' show ExcludeFocus;
 import 'package:material_ui/material_ui.dart'
     show
         Align,
@@ -19,7 +21,7 @@ import 'package:shell/taskbar.dart' show TaskBar;
 import 'package:shell/terminal.dart' show TerminalWidget;
 
 class CompositorController extends StatelessWidget {
-  const CompositorController({
+  const new({
     required this.onUpdateCurrentPageIndex,
     required this.toggleOverview,
     required this.pageController,
@@ -41,7 +43,7 @@ class CompositorController extends StatelessWidget {
         final logoutCmd = config.logout;
 
         final leading = <Widget>[
-          if (launcherCmd != null && launcherCmd.isNotEmpty)
+          if (launcherCmd != null && launcherCmd.isNotEmpty && !kDebugMode)
             Padding(
               padding: const EdgeInsets.only(left: 2),
               child: GridWidget(command: launcherCmd),
@@ -56,30 +58,32 @@ class CompositorController extends StatelessWidget {
           ),
         ];
 
-        final trailing = <Widget>[
-          if (terminalCmd != null && terminalCmd.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 20),
-              child: Center(
-                child: TerminalWidget(command: terminalCmd),
-              ),
-            ),
-          if (logoutCmd != null && logoutCmd.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: SystemWidget(command: logoutCmd),
-            ),
-        ];
+        final trailing = kDebugMode
+            ? <Widget>[]
+            : <Widget>[
+                if (terminalCmd != null && terminalCmd.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 20),
+                    child: Center(child: TerminalWidget(command: terminalCmd)),
+                  ),
+                if (logoutCmd != null && logoutCmd.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: SystemWidget(command: logoutCmd),
+                  ),
+              ];
 
-        return Align(
-          alignment: .bottomCenter,
-          child: SizedBox(
-            width: double.maxFinite,
-            height: 64,
-            child: TaskBar(
-              leading: leading,
-              center: const [],
-              trailing: trailing,
+        return ExcludeFocus(
+          child: Align(
+            alignment: .bottomCenter,
+            child: SizedBox(
+              width: double.maxFinite,
+              height: 64,
+              child: TaskBar(
+                leading: leading,
+                center: const [],
+                trailing: trailing,
+              ),
             ),
           ),
         );

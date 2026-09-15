@@ -6,7 +6,7 @@ part of 'surface.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-Surface _$SurfaceFromJson(Map<String, dynamic> json) => Surface(
+Surface _$SurfaceFromJson(Map json) => Surface(
   handle: (json['handle'] as num).toInt(),
   pid: (json['client_pid'] as num).toInt(),
   gid: (json['client_gid'] as num).toInt(),

@@ -6,7 +6,7 @@ part 'sub_surface.g.dart';
 
 @JsonSerializable()
 class SubSurface extends Equatable {
-  const SubSurface({
+  const new({
     required this.handle,
     required this.textureId,
     required this.parentHandle,
@@ -18,8 +18,7 @@ class SubSurface extends Equatable {
     this.bufferHeight = 0,
   });
 
-  factory SubSurface.fromJson(Map<String, dynamic> json) =>
-      _$SubSurfaceFromJson(json);
+  factory fromJson(Map<String, dynamic> json) => _$SubSurfaceFromJson(json);
 
   Map<String, dynamic> toJson() => _$SubSurfaceToJson(this);
 

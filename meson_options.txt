@@ -16,3 +16,4 @@ option('valgrind', type: 'boolean', value: false, description: 'Enable Valgrind 
 option('enable_impeller', type: 'boolean', value: true, description: 'Enable Impeller rendering backend')
 option('enable_vulkan', type: 'boolean', value: false, description: 'Enable Vulkan rendering backend')
 option('enable_damage_history', type: 'boolean', value: true, description: 'Enable damage history tracking')
+option('enable_trace', type: 'boolean', value: false, description: 'Enable in-process GPU/Perfetto/RenderDoc tracing')

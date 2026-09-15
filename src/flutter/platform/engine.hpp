@@ -8,7 +8,7 @@
 // #include "gl_intercept_debug.h"
 #define GL_ASSERT_ERROR(instance) \
         do { \
-            GLenum err = instance->glGetError(); \
+            GLenum err = (instance)->glGetError(); \
             if (err != GL_NO_ERROR) { \
                 wlr_log(WLR_ERROR, "GL ERROR: %d", err); \
             } \
@@ -26,5 +26,5 @@ void engine_cb_log_message(const char *tag, const char *message, void *user_data
 bool engine_cb_renderer_present(void *user_data, const FlutterPresentInfo *present_info);
 void engine_dispose(FlutterEngine engine, FlutterEngineAOTData aot_data);
 void sparrow_engine_init_channels();
-
+void sparrow_engine_reset_channels();
 #endif

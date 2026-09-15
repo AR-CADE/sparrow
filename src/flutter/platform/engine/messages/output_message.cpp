@@ -35,20 +35,26 @@ static flutter::EncodableMap create_output_map(Output *output, Core *instance)
         {flutter::EncodableValue("scale"), flutter::EncodableValue(wlr_out->scale)},
         {flutter::EncodableValue("transform"), flutter::EncodableValue((int64_t)wlr_out->transform)},
         {flutter::EncodableValue("modes"), flutter::EncodableValue(modes_list)},
+        {flutter::EncodableValue("available_modes"), flutter::EncodableValue(modes_list)},
     };
 }
 
 void send_output_added(Output *output)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !output || !output->wlr_output)
+    if (!instance || !instance->pigeon_flutter_api || !output || !output->wlr_output)
     {
         return;
     }
 
     auto map = create_output_map(output, instance);
-    instance->wlroots_channel->InvokeMethod("output_added",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->OutputAdded(
+        map,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "output_added error: %s", err.message().c_str());
+    });
 
     struct wlr_output *wlr_out = output->wlr_output;
     wlr_log(WLR_INFO, "Sent output_added for %s (id=%d, %dx%d @ %d mHz)",
@@ -59,7 +65,7 @@ void send_output_added(Output *output)
 void sparrow_send_all_outputs()
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel)
+    if (!instance || !instance->pigeon_flutter_api)
     {
         return;
     }
@@ -77,17 +83,18 @@ void sparrow_send_all_outputs()
 void send_output_removed(uint32_t output_id)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel)
+    if (!instance || !instance->pigeon_flutter_api)
     {
         return;
     }
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("id"), flutter::EncodableValue((int64_t)output_id)},
-    };
-
-    instance->wlroots_channel->InvokeMethod("output_removed",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->OutputRemoved(
+        output_id,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "output_removed error: %s", err.message().c_str());
+    });
 
     wlr_log(WLR_INFO, "Sent output_removed for id=%d", output_id);
 }
@@ -95,14 +102,19 @@ void send_output_removed(uint32_t output_id)
 void send_output_changed(Output *output)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !output || !output->wlr_output)
+    if (!instance || !instance->pigeon_flutter_api || !output || !output->wlr_output)
     {
         return;
     }
 
     auto map = create_output_map(output, instance);
-    instance->wlroots_channel->InvokeMethod("output_changed",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->OutputChanged(
+        map,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "output_changed error: %s", err.message().c_str());
+    });
 
 #ifdef DEBUG
     struct wlr_output *wlr_out = output->wlr_output;

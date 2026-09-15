@@ -18,9 +18,7 @@ import 'package:shell/configuration_repository.dart'
     show ConfigurationRepository;
 
 class Background extends StatelessWidget {
-  const Background({
-    super.key,
-  });
+  const new({super.key});
 
   /// Soft pastel Flutter blue
   static const Color pastelFlutterBlue = Color(0xFF5482A6);
@@ -47,11 +45,9 @@ class Background extends StatelessWidget {
           }
         }
 
-        // Fallback: solid pastel Flutter blue
+        // TODO(cparm): use default color from configs
         return const SizedBox.expand(
-          child: ColoredBox(
-            color: pastelFlutterBlue,
-          ),
+          child: ColoredBox(color: pastelFlutterBlue),
         );
       },
     );

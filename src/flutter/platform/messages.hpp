@@ -2,7 +2,6 @@
 #define MESSAGES_H
 
 #include <cstdint>
-#include <string>
 #include "client_wrapper/encodable_value.h"
 
 struct surface_pointer_event_message

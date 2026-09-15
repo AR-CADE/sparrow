@@ -1,4 +1,3 @@
-import 'dart:collection' show HashMap;
 import 'dart:io' show stderr, stdout;
 
 import 'package:compositor_dart/core/constants.dart' show KeyStatus;
@@ -7,23 +6,15 @@ import 'package:compositor_dart/data/models/compositor_sockets.dart'
 import 'package:compositor_dart/data/models/display_mode.dart' show DisplayMode;
 import 'package:compositor_dart/data/models/surface.dart' show Surface;
 import 'package:flutter/foundation.dart' show FlutterError;
-import 'package:flutter/services.dart'
-    show MethodCall, MethodChannel, MissingPluginException, PlatformException;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:logging/logging.dart' show Logger;
 import 'package:material_ui/material_ui.dart' show debugPrint;
+import 'package:pigeon_compositor/pigeon_compositor.dart'
+    show CompositorHostApi;
 
 class CompositorPlatformApi {
-  CompositorPlatformApi() {
-    channel.setMethodCallHandler((call) async {
-      final handler = handlers[call.method];
-      if (handler == null) {
-        debugPrint('unhandled call: ${call.method}');
-      } else {
-        debugPrint('handled call ${call.method}');
-        return handler(call);
-      }
-    });
-  }
+  new({CompositorHostApi? hostApi}) : _hostApi = hostApi ?? CompositorHostApi();
+
   bool interactive = true;
   static void initLogger() {
     FlutterError.onError = (details) {
@@ -35,48 +26,30 @@ class CompositorPlatformApi {
     });
   }
 
-  final MethodChannel channel = const MethodChannel('wlroots');
-
-  final HashMap<String, Future<dynamic> Function(MethodCall)> handlers =
-      HashMap();
-
-  void addHandler(String method, Future<dynamic> Function(MethodCall) handler) {
-    if (handlers.containsKey(method)) {
-      throw Exception('attemped to add duplicate handler for $method');
-    }
-    handlers[method] = handler;
-  }
+  final CompositorHostApi _hostApi;
+  CompositorHostApi get hostApi => _hostApi;
 
   Future<void> surfaceToplevelSetSize(
     Surface surface,
     int width,
     int height,
   ) async {
-    final r = await channel.invokeListMethod('surface_toplevel_set_size', [
-      surface.handle,
-      width,
-      height,
-    ]);
-    // print(r);
+    await _hostApi.surfaceToplevelSetSize(surface.handle, width, height);
   }
 
   Future<void> surfaceToplevelSetMaximized(
     Surface surface, {
     bool maximized = true,
   }) async {
-    final r = await channel.invokeListMethod('surface_toplevel_set_maximized', [
+    await _hostApi.surfaceToplevelSetMaximized(
       surface.handle,
-      if (maximized) 1 else 0,
-    ]);
-    // print(r);
+      maximized: maximized,
+    );
   }
 
   Future<bool> surfaceToplevelClose(Surface surface) async {
     try {
-      await channel.invokeListMethod('surface_toplevel_close', [
-        surface.handle,
-      ]);
-      return true;
+      return await _hostApi.surfaceToplevelClose(surface.handle);
     } on PlatformException catch (e) {
       debugPrint('Failed to close toplevel: $e');
       return false;
@@ -84,21 +57,19 @@ class CompositorPlatformApi {
   }
 
   Future<void> surfaceFocus(Surface surface) async {
-    await channel.invokeListMethod('surface_focus', [surface.handle]);
+    await _hostApi.surfaceFocus(surface.handle);
   }
 
   Future<void> clearFocus(Surface surface) async {
-    await channel.invokeMethod('surface_clear_focus', [surface.handle]);
+    await _hostApi.surfaceClearFocus();
   }
 
-  Future<void> forceRenderAllViews(bool force) async {
-    await channel.invokeListMethod('force_render_all_views', [
-      if (force) 1 else 0,
-    ]);
+  Future<void> forceRenderAllViews({required bool force}) async {
+    await _hostApi.forceRenderAllViews(force: force);
   }
 
   Future<void> setPrimaryOutput(int outputId) async {
-    await channel.invokeMethod('set_primary_output', [outputId]);
+    await _hostApi.setPrimaryOutput(outputId);
   }
 
   // NOTE: surfaceBeginMove and surfaceBeginResize have been removed.
@@ -107,11 +78,7 @@ class CompositorPlatformApi {
   // and surfaceToplevelSetSize.
 
   Future<void> surfaceSetPosition(Surface surface, int x, int y) async {
-    await channel.invokeListMethod('surface_set_position', [
-      surface.handle,
-      x,
-      y,
-    ]);
+    await _hostApi.surfaceSetPosition(surface.handle, x, y);
   }
 
   /// Request a synchronized resize -
@@ -123,17 +90,12 @@ class CompositorPlatformApi {
     int height,
     int requestId,
   ) async {
-    await channel.invokeListMethod('surface_request_resize', [
-      handle,
-      width,
-      height,
-      requestId,
-    ]);
+    await _hostApi.surfaceRequestResize(handle, width, height, requestId);
   }
 
   /// Signal end of interactive resize operation.
   Future<void> surfaceEndResize(int handle) async {
-    await channel.invokeListMethod('surface_end_resize', [handle]);
+    await _hostApi.surfaceEndResize(handle);
   }
 
   /// Enable direct input mode for low-latency gaming.
@@ -146,10 +108,7 @@ class CompositorPlatformApi {
     if (!interactive) {
       return;
     }
-    await channel.invokeListMethod('set_direct_input_mode', [
-      enabled,
-      surface?.handle ?? 0,
-    ]);
+    await _hostApi.setDirectInputMode(surface?.handle ?? 0, enabled: enabled);
   }
 
   Future<void> surfaceSendKey(
@@ -161,21 +120,31 @@ class CompositorPlatformApi {
     if (!interactive) {
       return;
     }
-    await channel.invokeListMethod('surface_keyboard_key', [
+    await _hostApi.surfaceKeyboardKey(
       surface.handle,
       keycode,
       status.index,
       timestamp.inMicroseconds,
-    ]);
+    );
+  }
+
+  Future<void> surfacePointerEvent(List<dynamic> data) async {
+    if (!interactive) {
+      return;
+    }
+    await _hostApi.surfacePointerEvent(data);
+  }
+
+  Future<void> popupPointerEvent(List<dynamic> data) async {
+    if (!interactive) {
+      return;
+    }
+    await _hostApi.popupPointerEvent(data);
   }
 
   Future<CompositorSockets> getSocketPaths() async {
-    final response =
-        await channel.invokeMethod('get_socket_paths') as Map<dynamic, dynamic>;
-    return CompositorSockets(
-      wayland: response['wayland'] as String,
-      x: response['x'] as String,
-    );
+    final response = await _hostApi.getSocketPaths();
+    return CompositorSockets(wayland: response.wayland, x: response.x);
   }
 
   /// Returns `true` if we are currently running in the compositor embedder.
@@ -188,9 +157,8 @@ class CompositorPlatformApi {
     if (_isCompositor != null) return _isCompositor!;
 
     try {
-      await channel.invokeMethod('is_compositor');
-      _isCompositor = true;
-    } on MissingPluginException {
+      _isCompositor = await _hostApi.isCompositor();
+    } on PlatformException {
       _isCompositor = false;
     }
 
@@ -201,8 +169,7 @@ class CompositorPlatformApi {
   /// Returns true on success, false on failure.
   Future<bool> setVsyncOutput(int outputId) async {
     try {
-      await channel.invokeMethod('set_vsync_output', [outputId]);
-      return true;
+      return await _hostApi.setVsyncOutput(outputId);
     } on PlatformException catch (e) {
       debugPrint('Failed to set vsync output: $e');
       return false;
@@ -213,8 +180,7 @@ class CompositorPlatformApi {
   /// Returns true on success, false on failure.
   Future<bool> setVsyncRateLimit(int maxHz) async {
     try {
-      await channel.invokeMethod('set_vsync_rate_limit', [maxHz]);
-      return true;
+      return await _hostApi.setVsyncRateLimit(maxHz);
     } on PlatformException catch (e) {
       debugPrint('Failed to set vsync rate limit: $e');
       return false;
@@ -225,13 +191,12 @@ class CompositorPlatformApi {
   /// Returns true on success, false on failure.
   Future<bool> setOutputMode(int outputId, DisplayMode mode) async {
     try {
-      await channel.invokeMethod('set_output_mode', [
+      return await _hostApi.setOutputMode(
         outputId,
         mode.width,
         mode.height,
         mode.refresh,
-      ]);
-      return true;
+      );
     } on PlatformException catch (e) {
       debugPrint('Failed to set output mode: $e');
       return false;
@@ -242,8 +207,7 @@ class CompositorPlatformApi {
   /// Returns true on success, false on failure.
   Future<bool> setOutputPosition(int outputId, int x, int y) async {
     try {
-      await channel.invokeMethod('set_output_position', [outputId, x, y]);
-      return true;
+      return await _hostApi.setOutputPosition(outputId, x, y);
     } on PlatformException catch (e) {
       debugPrint('Failed to set output position: $e');
       return false;
@@ -254,8 +218,7 @@ class CompositorPlatformApi {
   /// Returns true on success, false on failure.
   Future<bool> setOutputScale(int outputId, double scale) async {
     try {
-      await channel.invokeMethod('set_output_scale', [outputId, scale]);
-      return true;
+      return await _hostApi.setOutputScale(outputId, scale);
     } on PlatformException catch (e) {
       debugPrint('Failed to set output scale: $e');
       return false;
@@ -263,9 +226,9 @@ class CompositorPlatformApi {
   }
 
   /// Toggle or set damage region visualization overlay
-  Future<void> debugSetDamageVisualization(bool enabled) async {
+  Future<void> debugSetDamageVisualization({bool enabled = false}) async {
     try {
-      await channel.invokeMethod('debug_set_damage_visualization', enabled);
+      await _hostApi.debugSetDamageVisualization(enabled: enabled);
     } on PlatformException catch (e) {
       debugPrint('Failed to set damage visualization: $e');
     }
@@ -274,12 +237,19 @@ class CompositorPlatformApi {
   /// Get whether damage region visualization overlay is enabled
   Future<bool> debugGetDamageVisualization() async {
     try {
-      final res =
-          await channel.invokeMethod<bool>('debug_get_damage_visualization');
-      return res ?? false;
+      return await _hostApi.debugGetDamageVisualization();
     } on PlatformException catch (e) {
       debugPrint('Failed to get damage visualization: $e');
       return false;
+    }
+  }
+
+  /// Signal to C that Dart is ready to receive messages
+  Future<void> compositorReady() async {
+    try {
+      await _hostApi.compositorReady();
+    } on PlatformException catch (e) {
+      debugPrint('Failed to signal compositor ready: $e');
     }
   }
 

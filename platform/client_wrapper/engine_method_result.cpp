@@ -19,8 +19,7 @@ ReplyManager::~ReplyManager()
         // Warn, rather than send a not-implemented response, since the engine may
         // no longer be valid at this point.
         std::cerr
-            << "Warning: Failed to respond to a message. This is a memory leak."
-            << std::endl;
+            << "Warning: Failed to respond to a message. This is a memory leak.\n";
     }
 }
 
@@ -31,8 +30,7 @@ void ReplyManager::SendResponseData(const std::vector<uint8_t> *data)
         std::cerr
             << "Error: Only one of Success, Error, or NotImplemented can be "
             "called,"
-            << " and it can be called exactly once. Ignoring duplicate result."
-            << std::endl;
+            << " and it can be called exactly once. Ignoring duplicate result.\n";
         return;
     }
 

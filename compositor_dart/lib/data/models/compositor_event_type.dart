@@ -21,4 +21,6 @@ enum CompositorEventType {
   gestureSwipeUpdate,
   gestureSwipeEnd,
   surfaceRequestActivate,
+  zoomScroll,
+  zoomKey,
 }

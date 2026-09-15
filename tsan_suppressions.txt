@@ -1,7 +1,19 @@
 # ThreadSanitizer suppression file for Sparrow
-# Suppresses false positives from uninstrumented system GPU drivers (Mesa/Gallium/DRM)
+# Suppresses false positives from uninstrumented system GPU drivers (Mesa/Gallium/DRM) and external libraries
 
 race:libgallium
 race:libEGL_mesa
 race:libdrm
 race:libfontconfig
+race:libflutter_engine
+thread:libflutter_engine
+race:libvulkan_radeon
+race:libvulkan
+thread:libvulkan_radeon
+mutex:libvulkan_radeon
+deadlock:libvulkan_radeon
+race:libVkLayer_
+thread:libVkLayer_
+mutex:libVkLayer_
+deadlock:libVkLayer_
+

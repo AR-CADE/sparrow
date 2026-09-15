@@ -22,7 +22,18 @@ is_asan = get_option('asan') or get_option('b_sanitize').contains('address')
 is_ubsan = get_option('ubsan') or get_option('b_sanitize').contains('undefined')
 is_tsan = get_option('tsan') or get_option('b_sanitize').contains('thread')
 is_valgrind = get_option('valgrind') or get_option('b_sanitize').contains('memory')
+is_trace = get_option('enable_trace')
 is_debug = get_option('disable_optimizations') or get_option('buildtype') == 'debug' or get_option('buildtype') == 'debugoptimized' or is_asan or is_tsan or is_valgrind
+
+dl_dep = cpp.find_library('dl', required: false)
+
+if is_trace
+  add_project_arguments(['-DSPARROW_ENABLE_TRACE'], language: ['cpp', 'c'])
+  perfetto_sub = subproject('perfetto')
+  perfetto_dep = perfetto_sub.get_variable('perfetto_dep')
+else
+  perfetto_dep = dependency('', required: false)
+endif
 
 if is_valgrind
   add_project_arguments(['-DHAS_VALGRIND'], language: ['cpp', 'c'])
@@ -34,7 +45,7 @@ if is_asan
 endif
 
 if is_ubsan
-  add_project_arguments(['-fsanitize=undefined'], language: ['cpp', 'c'])
+  add_project_arguments(['-fsanitize=undefined', '-g3', '-DHAS_UBSAN'], language: ['cpp', 'c'])
   add_project_link_arguments(['-fsanitize=undefined'], language: ['cpp', 'c'])
 endif
 
@@ -74,7 +85,7 @@ else
     fs = import('fs')
     profdata_path = meson.project_source_root() / 'sparrow.profdata'
     if fs.exists(profdata_path)
-      add_project_arguments(['-fprofile-instr-use=' + profdata_path, '-Wno-profile-instr-unprofiled', '-Wno-profile-instr-out-of-date'], language: ['cpp', 'c'])
+      add_project_arguments(['-fprofile-instr-use=' + profdata_path, '-Wno-profile-instr-unprofiled', '-Wprofile-instr-out-of-date'], language: ['cpp', 'c'])
       add_project_link_arguments(['-fprofile-instr-use=' + profdata_path], language: ['cpp', 'c'])
     endif
   endif
@@ -86,6 +97,8 @@ sparrow_api_inc  = include_directories('src/api')
 
 wayland_server = dependency('wayland-server')
 wayland_client = dependency('wayland-client')
+wayland_egl    = dependency('wayland-egl')
+wayland_cursor = dependency('wayland-cursor')
 wayland_protos = dependency('wayland-protocols', version: '>=1.37')
 drm            = dependency('libdrm')
 egl            = dependency('egl')
@@ -94,6 +107,7 @@ libinput       = dependency('libinput', version: '>=1.7.0')
 pixman         = dependency('pixman-1')
 xkbcommon      = dependency('xkbcommon')
 embedder       = subproject('flutter_embedder').get_variable('embedder_dep')
+subproject('wleird')
 
 add_project_arguments('-DFLUTTER_COMPOSITOR', language : ['c', 'cpp'])
 
@@ -232,6 +246,7 @@ summary = [
     '           asan: @0@'.format(is_asan),
     '          ubsan: @0@'.format(is_ubsan),
     '           tsan: @0@'.format(is_tsan),
+    '          trace: @0@'.format(is_trace),
     '----------------',
     ''
 ]

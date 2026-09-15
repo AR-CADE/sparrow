@@ -5,14 +5,9 @@ part 'display_mode.g.dart';
 
 @JsonSerializable()
 class DisplayMode extends Equatable {
-  const DisplayMode({
-    required this.width,
-    required this.height,
-    required this.refresh,
-  });
+  const new({required this.width, required this.height, required this.refresh});
 
-  factory DisplayMode.fromJson(Map<String, dynamic> json) =>
-      _$DisplayModeFromJson(json);
+  factory fromJson(Map<String, dynamic> json) => _$DisplayModeFromJson(json);
 
   final int width;
   final int height;

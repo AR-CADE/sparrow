@@ -1,7 +1,6 @@
 #ifndef SURFACE_CALLBACK_H
 #define SURFACE_CALLBACK_H
 
-#include "flutter_embedder.h"
 #include <cstdint>
 #include <sparrow/nonstd/wlroots-full.hpp>
 

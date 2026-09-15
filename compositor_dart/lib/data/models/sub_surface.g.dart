@@ -6,7 +6,7 @@ part of 'sub_surface.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-SubSurface _$SubSurfaceFromJson(Map<String, dynamic> json) => SubSurface(
+SubSurface _$SubSurfaceFromJson(Map json) => SubSurface(
   handle: (json['handle'] as num).toInt(),
   textureId: (json['texture_id'] as num).toInt(),
   parentHandle: (json['parent_handle'] as num).toInt(),

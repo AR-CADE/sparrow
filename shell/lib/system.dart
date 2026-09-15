@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 import 'dart:io' show Process, ProcessStartMode;
 
+import 'package:flutter/widgets.dart' show FocusManager;
 import 'package:material_ui/material_ui.dart'
     show
         BuildContext,
@@ -16,10 +17,7 @@ import 'package:material_ui/material_ui.dart'
         WidgetStateProperty;
 
 class SystemWidget extends StatelessWidget {
-  const SystemWidget({
-    required this.command,
-    super.key,
-  });
+  const new({required this.command, super.key});
 
   final String command;
 
@@ -31,15 +29,11 @@ class SystemWidget extends StatelessWidget {
         tooltip: 'Log out',
         color: Colors.white,
         style: ButtonStyle(
-          backgroundColor: WidgetStateProperty.all(
-            Colors.black.withAlpha(60),
-          ),
+          backgroundColor: WidgetStateProperty.all(Colors.black.withAlpha(60)),
         ),
-        icon: const Icon(
-          size: 28,
-          Icons.logout,
-        ),
+        icon: const Icon(size: 28, Icons.logout),
         onPressed: () {
+          FocusManager.instance.primaryFocus?.unfocus();
           final parts = command.trim().split(RegExp(r'\s+'));
           if (parts.isNotEmpty && parts.first.isNotEmpty) {
             unawaited(

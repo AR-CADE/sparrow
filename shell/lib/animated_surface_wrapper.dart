@@ -5,6 +5,7 @@ import 'package:compositor_dart/data/models/display_output.dart'
 import 'package:compositor_dart/data/models/surface.dart' show Surface;
 import 'package:compositor_dart/data/repositories/compositor/compositor_repository.dart'
     show CompositorRepository;
+import 'package:flutter/widgets.dart';
 import 'package:material_ui/material_ui.dart'
     show
         AnimationController,
@@ -24,7 +25,6 @@ import 'package:material_ui/material_ui.dart'
         StatelessWidget,
         ValueKey,
         Widget;
-import 'package:flutter/widgets.dart';
 import 'package:shell/core.dart'
     show
         OverviewDragTarget,
@@ -37,7 +37,7 @@ import 'package:shell/core.dart'
         radiusAnimationAccel;
 
 class AnimatedSurfaceWrapper extends StatelessWidget {
-  const AnimatedSurfaceWrapper({
+  const new({
     required this.toggleOverview,
     required this.gap,
     required this.index,
@@ -76,7 +76,9 @@ class AnimatedSurfaceWrapper extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: gap),
         child: fraction == minFraction
             ? GestureDetector(
-                onTap: () async => select(index),
+                onTap: () async {
+                  await select(index);
+                },
                 child: DismissableSurface(
                   surface: surface,
                   radius: radius,
@@ -106,7 +108,7 @@ class AnimatedSurfaceWrapper extends StatelessWidget {
 }
 
 class RoundedSurface extends StatelessWidget {
-  const RoundedSurface({
+  const new({
     required this.radius,
     required this.output,
     super.key,
@@ -132,7 +134,7 @@ class RoundedSurface extends StatelessWidget {
 }
 
 class DraggableSurface extends StatelessWidget {
-  const DraggableSurface({
+  const new({
     required this.radius,
     required this.closeOverview,
     required this.openOverview,
@@ -195,7 +197,9 @@ class DraggableSurface extends StatelessWidget {
             } else if (isVerticalTopPointAllowed) {
               // CompositorRepository().platform.interactive = true;
             }
-            await CompositorRepository().platform.forceRenderAllViews(true);
+            await CompositorRepository().platform.forceRenderAllViews(
+              force: true,
+            );
 
             await CompositorRepository().platform.clearFocus(surface);
           }
@@ -255,9 +259,13 @@ class DraggableSurface extends StatelessWidget {
             isVerticalBottomPointAllowed = false;
             if (target == .closeOverview) {
               await closeOverview(surface, center: false);
-              await CompositorRepository().platform.forceRenderAllViews(false);
+              await CompositorRepository().platform.forceRenderAllViews(
+                force: false,
+              );
             } else {
-              await CompositorRepository().platform.forceRenderAllViews(true);
+              await CompositorRepository().platform.forceRenderAllViews(
+                force: true,
+              );
               await openOverview(null);
             }
           } else if (isVerticalTopPointAllowed) {
@@ -294,9 +302,13 @@ class DraggableSurface extends StatelessWidget {
             isVerticalBottomPointAllowed = false;
             if (target == .closeOverview) {
               await closeOverview(surface, center: false);
-              await CompositorRepository().platform.forceRenderAllViews(false);
+              await CompositorRepository().platform.forceRenderAllViews(
+                force: false,
+              );
             } else {
-              await CompositorRepository().platform.forceRenderAllViews(true);
+              await CompositorRepository().platform.forceRenderAllViews(
+                force: true,
+              );
               await openOverview(null);
             }
           } else if (isVerticalTopPointAllowed) {
@@ -313,7 +325,7 @@ class DraggableSurface extends StatelessWidget {
 }
 
 class DismissableSurface extends StatelessWidget {
-  const DismissableSurface({
+  const new({
     required this.radius,
     required this.output,
     required this.surface,
@@ -336,9 +348,7 @@ class DismissableSurface extends StatelessWidget {
         key: ValueKey<int>(surface.handle),
         direction: .up,
         confirmDismiss: (direction) async {
-          await CompositorRepository().platform.surfaceToplevelClose(
-            surface,
-          );
+          await CompositorRepository().platform.surfaceToplevelClose(surface);
           return true;
         },
         child: RoundedSurface(radius: radius, output: output, child: child),

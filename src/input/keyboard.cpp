@@ -1,6 +1,11 @@
 #include "keyboard.hpp"
 #include "seat.hpp"
 #include <core.hpp>
+#if defined (SPARROW_ENABLE_TRACE)
+    #include "util/trace.hpp"
+#endif
+#include "flutter/platform/engine/messages/seat_message.hpp"
+#include "flutter/platform/text_input.hpp"
 
 #include <xkbcommon/xkbcommon-compose.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -72,6 +77,30 @@ void keyboard_handle_key(struct wl_listener *listener, void *data)
     {
         const xkb_keysym_t sym = xkb_state_key_get_one_sym(
             keyboard->keyboard->xkb_state, event->keycode + 8);
+
+        uint32_t mods = wlr_keyboard_get_modifiers(keyboard->keyboard);
+        if ((mods & WLR_MODIFIER_LOGO) != 0)
+        {
+            // Intercept Super + +/-/0 for Wayfire/KDE style desktop screen zoom
+            if ((sym == XKB_KEY_plus) || (sym == XKB_KEY_equal) || (sym == XKB_KEY_KP_Add))
+            {
+                send_zoom_key(1);
+                return;
+            }
+
+            if ((sym == XKB_KEY_minus) || (sym == XKB_KEY_underscore) || (sym == XKB_KEY_KP_Subtract))
+            {
+                send_zoom_key(-1);
+                return;
+            }
+
+            if ((sym == XKB_KEY_0) || (sym == XKB_KEY_KP_0))
+            {
+                send_zoom_key(0);
+                return;
+            }
+        }
+
         if (sym == XKB_KEY_F8)
         {
             Output *out = instance->vsync_output ? instance->vsync_output :
@@ -126,6 +155,23 @@ void keyboard_handle_key(struct wl_listener *listener, void *data)
             return;
         }
 
+#if defined (SPARROW_ENABLE_TRACE)
+        if (sym == XKB_KEY_F7)
+        {
+            SparrowTrace::instance().trigger_renderdoc_capture();
+            return;
+        }
+
+        if (sym == XKB_KEY_F6)
+        {
+            bool active = SparrowTrace::instance().toggle_perfetto_session();
+            wlr_log(WLR_INFO, "[PERFETTO] Tracing session toggled via F6: %s",
+                active ? "RECORDING" : "STOPPED & SAVED");
+            return;
+        }
+
+#endif
+
         if (sym == XKB_KEY_F11)
         {
             instance->show_fps = !instance->show_fps;
@@ -144,20 +190,103 @@ void keyboard_handle_key(struct wl_listener *listener, void *data)
 
         if (sym == XKB_KEY_F12)
         {
-            instance->debug_damage = !instance->debug_damage;
-            wlr_log(WLR_INFO, "Damage visualization debug mode toggled: %s",
-                instance->debug_damage ? "ENABLED" : "DISABLED");
-            sparrow_damage_add_box(nullptr);
-            return;
+            if (instance->engine == nullptr)
+            {
+                instance->debug_damage = !instance->debug_damage;
+                wlr_log(WLR_INFO, "Damage visualization debug mode toggled: %s",
+                    instance->debug_damage ? "ENABLED" : "DISABLED");
+                sparrow_damage_add_box(nullptr);
+                return;
+            }
         }
     }
 
-    wlr_seat_keyboard_notify_key(instance->seat, event->time_msec, event->keycode,
-        event->state);
+    if (sparrow_text_input_is_active() && keyboard->keyboard && keyboard->keyboard->xkb_state)
+    {
+        uint32_t keycode = event->keycode + 8;
+        xkb_keysym_t sym = xkb_state_key_get_one_sym(
+            keyboard->keyboard->xkb_state, keycode);
+        uint32_t unicode = xkb_state_key_get_utf32(
+            keyboard->keyboard->xkb_state, keycode);
+
+        if (keyboard->compose_state && (event->state == WL_KEYBOARD_KEY_STATE_PRESSED))
+        {
+            xkb_compose_state_feed(keyboard->compose_state, sym);
+            enum xkb_compose_status status = xkb_compose_state_get_status(keyboard->compose_state);
+            if (status == XKB_COMPOSE_COMPOSED)
+            {
+                sym     = xkb_compose_state_get_one_sym(keyboard->compose_state);
+                unicode = xkb_keysym_to_utf32(sym);
+                xkb_compose_state_reset(keyboard->compose_state);
+            } else if (status == XKB_COMPOSE_COMPOSING)
+            {
+                return; // Consumed dead key
+            } else if (status == XKB_COMPOSE_CANCELLED)
+            {
+                xkb_compose_state_reset(keyboard->compose_state);
+            }
+        }
+
+        uint32_t mods     = wlr_keyboard_get_modifiers(keyboard->keyboard);
+        bool ctrl_active  = (mods & WLR_MODIFIER_CTRL) != 0;
+        bool shift_active = (mods & WLR_MODIFIER_SHIFT) != 0;
+        bool pressed = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+
+        if (pressed)
+        {
+            bool can_repeat = true;
+            if (keyboard->keyboard->keymap &&
+                !xkb_keymap_key_repeats(keyboard->keyboard->keymap, keycode))
+            {
+                can_repeat = false;
+            }
+
+            if (can_repeat)
+            {
+                int32_t rate  = keyboard->keyboard->repeat_info.rate;
+                int32_t delay = keyboard->keyboard->repeat_info.delay;
+                sparrow_text_input_start_repeat(keycode, sym, unicode, ctrl_active, shift_active,
+                    rate > 0 ? rate : 25, delay > 0 ? delay : 300);
+            }
+        } else
+        {
+            sparrow_text_input_stop_repeat(keycode);
+        }
+
+        sparrow_text_input_handle_key(sym, unicode, pressed, ctrl_active, shift_active);
+        return;
+    }
+
+    uint32_t xkb_keycode = event->keycode + 8;
+    xkb_keysym_t sym     = XKB_KEY_NoSymbol;
+    uint32_t unicode     = 0;
+    uint32_t mods = 0;
+    if (keyboard->keyboard)
+    {
+        mods = wlr_keyboard_get_modifiers(keyboard->keyboard);
+        if (keyboard->keyboard->xkb_state)
+        {
+            sym     = xkb_state_key_get_one_sym(keyboard->keyboard->xkb_state, xkb_keycode);
+            unicode = xkb_state_key_get_utf32(keyboard->keyboard->xkb_state, xkb_keycode);
+        }
+    }
+
+    bool pressed = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+
+    if (instance->engine != nullptr)
+    {
+        send_flutter_key_event(xkb_keycode, sym, unicode, pressed, mods, event->time_msec);
+    } else
+    {
+        wlr_seat_keyboard_notify_key(instance->seat, event->time_msec, event->keycode,
+            event->state);
+    }
 }
 
 void keyboard_destroy(struct wl_listener *listener, void *data)
 {
+    sparrow_text_input_stop_repeat(0);
+
     struct sparrow_keyboard *keyboard =
         wl_container_of(listener, keyboard, destroy);
     if (keyboard->compose_state != nullptr)

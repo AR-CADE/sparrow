@@ -22,9 +22,12 @@ echo -e "${CYAN}${BOLD}       Sparrow Profile-Guided Optimization (PGO)       ${
 echo -e "${CYAN}${BOLD}======================================================${NC}"
 echo ""
 
-HEADLESS_FLAG=""
+HEADLESS_FLAG="--headless"
 for arg in "$@"; do
     case "$arg" in
+        --no-headless|--gui)
+            HEADLESS_FLAG=""
+            ;;
         --headless|-H)
             HEADLESS_FLAG="--headless"
             ;;
@@ -60,7 +63,7 @@ fi
 
 # Step 3: Compile optimized release binary
 echo -e "${YELLOW}${BOLD}[STEP 3/3] Compiling final optimized binary (-fprofile-use)...${NC}"
-./build.sh release server
+./build.sh optimize server
 echo -e "${GREEN}[OK] PGO release build finished.${NC}\n"
 
 echo -e "${GREEN}${BOLD}======================================================${NC}"

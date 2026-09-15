@@ -1,0 +1,18 @@
+---
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-invalid-enum-default-initialization,
+  -bugprone-narrowing-conversions,
+  -bugprone-throwing-static-initialization,
+  performance-*,
+  -performance-enum-size,
+  clang-analyzer-*,
+  -clang-analyzer-security.ArrayBound,
+  -clang-analyzer-core.NullPointerArithm
+
+HeaderFilterRegex: '^(src|platform)/.*'
+ExcludeHeaderFilterRegex: '.*(subprojects|rapidjson|flutter_embedder|\.p/|protocol).*'
+FormatStyle: none
+WarningsAsErrors: ''
+...

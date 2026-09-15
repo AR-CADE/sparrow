@@ -7,7 +7,7 @@
 void send_popup_map(SparrowPopup *popup)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !popup || !popup->parent_view)
+    if (!instance || !instance->pigeon_flutter_api || !popup || !popup->parent_view)
     {
         return;
     }
@@ -109,24 +109,30 @@ void send_popup_map(SparrowPopup *popup)
         {flutter::EncodableValue("output_scale"), flutter::EncodableValue(popup->output_scale)},
     };
 
-    instance->wlroots_channel->InvokeMethod("popup_map",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->PopupMap(
+        map,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "popup_map error: %s", err.message().c_str());
+    });
 }
 
 void send_popup_unmap(uint32_t handle)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel)
+    if (!instance || !instance->pigeon_flutter_api)
     {
         return;
     }
 
     wlr_log(WLR_INFO, "Popup unmap: handle=%d", handle);
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)handle)},
-    };
-
-    instance->wlroots_channel->InvokeMethod("popup_unmap",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->PopupUnmap(
+        handle,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "popup_unmap error: %s", err.message().c_str());
+    });
 }

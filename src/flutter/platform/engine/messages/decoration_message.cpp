@@ -5,7 +5,7 @@
 void sparrow_send_decoration_update(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !view)
+    if (!instance || !instance->pigeon_flutter_api || !view)
     {
         return;
     }
@@ -15,11 +15,13 @@ void sparrow_send_decoration_update(SparrowView *view)
         "Sending decoration update: handle=%d, uses_ssd=%d, uses_csd=%d",
         view->handle, view->uses_ssd, uses_csd);
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)view->handle)},
-        {flutter::EncodableValue("uses_csd"), flutter::EncodableValue((int64_t)(uses_csd ? 1 : 0))},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_decoration",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceDecoration(
+        view->handle,
+        view->uses_ssd,
+        uses_csd,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_decoration error: %s", err.message().c_str());
+    });
 }

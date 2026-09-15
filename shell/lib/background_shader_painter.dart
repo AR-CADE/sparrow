@@ -3,8 +3,7 @@ import 'dart:ui' show Canvas, FragmentShader, Offset, Paint, Size;
 import 'package:material_ui/material_ui.dart' show CustomPainter;
 
 class BackgroundShaderPainter extends CustomPainter {
-  BackgroundShaderPainter(FragmentShader fragmentShader, this.time)
-    : shader = fragmentShader;
+  const new(FragmentShader fragmentShader, this.time) : shader = fragmentShader;
   final FragmentShader shader;
   final double time;
 

@@ -5,6 +5,7 @@
 #include <gdk/gdk.h>
 #include <string>
 #include <vector>
+#include "messages.g.h"
 
 // ---------------------------------------------------------------------------
 // Mock Pixel Buffer Texture with Cairo Vector Rendering
@@ -33,6 +34,7 @@ static gboolean mock_texture_copy_pixels(FlPixelBufferTexture *texture,
 }
 
 static void mock_texture_class_init(MockTextureClass *klass) {
+  (void)mock_texture_parent_class;
   FL_PIXEL_BUFFER_TEXTURE_CLASS(klass)->copy_pixels = mock_texture_copy_pixels;
 }
 
@@ -275,6 +277,7 @@ struct MockSurfaceInfo {
 };
 
 static FlMethodChannel *s_channel = nullptr;
+static PigeonCompositorCompositorFlutterApi *s_flutter_api = nullptr;
 static FlTextureRegistrar *s_texture_registrar = nullptr;
 static GtkWindow *s_window = nullptr;
 static GtkWidget *s_fl_view = nullptr;
@@ -320,9 +323,6 @@ static void get_current_window_size(int *out_w, int *out_h) {
 
 static void send_output_added(int64_t id, const char *name, int64_t width,
                               int64_t height, int64_t refresh, double scale) {
-  if (!s_channel)
-    return;
-
   g_autoptr(FlValue) map = fl_value_new_map();
   fl_value_set_string_take(map, "id", fl_value_new_int(id));
   fl_value_set_string_take(map, "name", fl_value_new_string(name));
@@ -344,15 +344,18 @@ static void send_output_added(int64_t id, const char *name, int64_t width,
   fl_value_append(modes, mode);
   fl_value_set_string_take(map, "modes", fl_value_ref(modes));
 
-  fl_method_channel_invoke_method(s_channel, "output_added", map, nullptr,
-                                  nullptr, nullptr);
+  if (s_flutter_api) {
+    pigeon_compositor_compositor_flutter_api_output_added(
+        s_flutter_api, map, nullptr, nullptr, nullptr);
+  }
+  if (s_channel) {
+    fl_method_channel_invoke_method(s_channel, "output_added", map, nullptr,
+                                    nullptr, nullptr);
+  }
   g_message("Mock: Sent output_added (%s, %ldx%ld)", name, width, height);
 }
 
 static void send_output_changed(int64_t id, int64_t width, int64_t height) {
-  if (!s_channel)
-    return;
-
   g_autoptr(FlValue) map = fl_value_new_map();
   fl_value_set_string_take(map, "id", fl_value_new_int(id));
   fl_value_set_string_take(map, "name", fl_value_new_string("WL-1"));
@@ -366,35 +369,42 @@ static void send_output_changed(int64_t id, int64_t width, int64_t height) {
   fl_value_set_string_take(map, "scale", fl_value_new_float(1.0));
   fl_value_set_string_take(map, "transform", fl_value_new_int(0));
 
-  fl_method_channel_invoke_method(s_channel, "output_changed", map, nullptr,
-                                  nullptr, nullptr);
+  if (s_flutter_api) {
+    pigeon_compositor_compositor_flutter_api_output_changed(
+        s_flutter_api, map, nullptr, nullptr, nullptr);
+  }
+  if (s_channel) {
+    fl_method_channel_invoke_method(s_channel, "output_changed", map, nullptr,
+                                    nullptr, nullptr);
+  }
   g_message("Mock: Sent output_changed (id=%ld, %ldx%ld)", id, width, height);
 }
 
 static void send_surface_geometry(int64_t handle, int64_t width,
                                   int64_t height) {
-  if (!s_channel)
-    return;
+  if (s_flutter_api) {
+    pigeon_compositor_compositor_flutter_api_surface_geometry(
+        s_flutter_api, handle, width, height, width, height, 0, 0, nullptr,
+        nullptr, nullptr);
+  }
+  if (s_channel) {
+    g_autoptr(FlValue) map = fl_value_new_map();
+    fl_value_set_string_take(map, "handle", fl_value_new_int(handle));
+    fl_value_set_string_take(map, "width", fl_value_new_int(width));
+    fl_value_set_string_take(map, "height", fl_value_new_int(height));
+    fl_value_set_string_take(map, "buffer_width", fl_value_new_int(width));
+    fl_value_set_string_take(map, "buffer_height", fl_value_new_int(height));
+    fl_value_set_string_take(map, "geo_x", fl_value_new_int(0));
+    fl_value_set_string_take(map, "geo_y", fl_value_new_int(0));
 
-  g_autoptr(FlValue) map = fl_value_new_map();
-  fl_value_set_string_take(map, "handle", fl_value_new_int(handle));
-  fl_value_set_string_take(map, "width", fl_value_new_int(width));
-  fl_value_set_string_take(map, "height", fl_value_new_int(height));
-  fl_value_set_string_take(map, "buffer_width", fl_value_new_int(width));
-  fl_value_set_string_take(map, "buffer_height", fl_value_new_int(height));
-  fl_value_set_string_take(map, "geo_x", fl_value_new_int(0));
-  fl_value_set_string_take(map, "geo_y", fl_value_new_int(0));
-
-  fl_method_channel_invoke_method(s_channel, "surface_geometry", map, nullptr,
-                                  nullptr, nullptr);
+    fl_method_channel_invoke_method(s_channel, "surface_geometry", map, nullptr,
+                                    nullptr, nullptr);
+  }
   g_message("Mock: Sent surface_geometry (handle=%ld, %ldx%ld)", handle, width,
             height);
 }
 
 static void send_surface_map(const MockSurfaceInfo &info) {
-  if (!s_channel)
-    return;
-
   g_autoptr(FlValue) map = fl_value_new_map();
   fl_value_set_string_take(map, "handle", fl_value_new_int(info.handle));
   fl_value_set_string_take(map, "texture_id",
@@ -424,8 +434,14 @@ static void send_surface_map(const MockSurfaceInfo &info) {
   fl_value_set_string_take(map, "min_height", fl_value_new_int(300));
   fl_value_set_string_take(map, "max_height", fl_value_new_int(2160));
 
-  fl_method_channel_invoke_method(s_channel, "surface_map", map, nullptr,
-                                  nullptr, nullptr);
+  if (s_flutter_api) {
+    pigeon_compositor_compositor_flutter_api_surface_map(
+        s_flutter_api, map, nullptr, nullptr, nullptr);
+  }
+  if (s_channel) {
+    fl_method_channel_invoke_method(s_channel, "surface_map", map, nullptr,
+                                    nullptr, nullptr);
+  }
   g_message("Mock: Sent surface_map for '%s' (handle=%ld, size=%ldx%ld)",
             info.title.c_str(), info.handle, info.width, info.height);
 }
@@ -472,10 +488,10 @@ static void spawn_next_mock_surface() {
 }
 
 static void close_mock_surface(int64_t handle = -1) {
-  if (s_surfaces.empty() || !s_channel)
+  if (s_surfaces.empty())
     return;
 
-  MockSurfaceInfo target;
+  MockSurfaceInfo target = {0, 0, "", "", 0, 0};
   if (handle <= 0) {
     target = s_surfaces.back();
     s_surfaces.pop_back();
@@ -489,12 +505,233 @@ static void close_mock_surface(int64_t handle = -1) {
     }
   }
 
-  g_autoptr(FlValue) map = fl_value_new_map();
-  fl_value_set_string_take(map, "handle", fl_value_new_int(target.handle));
-  fl_method_channel_invoke_method(s_channel, "surface_unmap", map, nullptr,
-                                  nullptr, nullptr);
+  if (target.handle <= 0)
+    return;
+
+  if (s_flutter_api) {
+    pigeon_compositor_compositor_flutter_api_surface_unmap(
+        s_flutter_api, target.handle, nullptr, nullptr, nullptr);
+  }
+  if (s_channel) {
+    g_autoptr(FlValue) map = fl_value_new_map();
+    fl_value_set_string_take(map, "handle", fl_value_new_int(target.handle));
+    fl_method_channel_invoke_method(s_channel, "surface_unmap", map, nullptr,
+                                    nullptr, nullptr);
+  }
   g_message("Mock: Sent surface_unmap for handle=%ld", target.handle);
 }
+
+// ---------------------------------------------------------------------------
+// Pigeon CompositorHostApi Implementation
+// ---------------------------------------------------------------------------
+
+static void mock_surface_request_resize(
+    int64_t surface_handle, int64_t width, int64_t height, int64_t request_id,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_request_resize(response_handle);
+}
+
+static void mock_surface_end_resize(
+    int64_t surface_handle,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_end_resize(response_handle);
+}
+
+static void mock_surface_toplevel_set_size(
+    int64_t surface_handle, int64_t width, int64_t height,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  if (surface_handle > 0 && width > 0 && height > 0) {
+    for (auto &surf : s_surfaces) {
+      if (surf.handle == surface_handle) {
+        surf.width = width;
+        surf.height = height;
+        break;
+      }
+    }
+    send_surface_geometry(surface_handle, width, height);
+  }
+  pigeon_compositor_compositor_host_api_respond_surface_toplevel_set_size(response_handle);
+}
+
+static void mock_surface_toplevel_set_maximized(
+    int64_t surface_handle, gboolean maximized,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_toplevel_set_maximized(response_handle);
+}
+
+static void mock_surface_toplevel_close(
+    int64_t surface_handle,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  g_message("Mock Pigeon: surface_toplevel_close called for handle=%ld", surface_handle);
+  close_mock_surface(surface_handle);
+  pigeon_compositor_compositor_host_api_respond_surface_toplevel_close(response_handle, TRUE);
+}
+
+static void mock_surface_focus(
+    int64_t surface_handle,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_focus(response_handle);
+}
+
+static void mock_surface_clear_focus(
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_clear_focus(response_handle);
+}
+
+static void mock_surface_set_position(
+    int64_t surface_handle, int64_t x, int64_t y,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_set_position(response_handle);
+}
+
+static void mock_force_render_all_views(
+    gboolean force,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_force_render_all_views(response_handle);
+}
+
+static void mock_set_direct_input_mode(
+    int64_t surface_handle, gboolean enabled,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_direct_input_mode(response_handle);
+}
+
+static void mock_set_primary_output(
+    int64_t output_id,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_primary_output(response_handle);
+}
+
+static void mock_set_vsync_output(
+    int64_t output_id,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_vsync_output(response_handle, TRUE);
+}
+
+static void mock_set_vsync_rate_limit(
+    int64_t max_hz,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_vsync_rate_limit(response_handle, TRUE);
+}
+
+static void mock_set_output_mode(
+    int64_t output_id, int64_t width, int64_t height, int64_t refresh,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_output_mode(response_handle, TRUE);
+}
+
+static void mock_set_output_position(
+    int64_t output_id, int64_t x, int64_t y,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_output_position(response_handle, TRUE);
+}
+
+static void mock_set_output_scale(
+    int64_t output_id, double scale,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_set_output_scale(response_handle, TRUE);
+}
+
+static void mock_debug_set_damage_visualization(
+    gboolean enabled,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_debug_set_damage_visualization(response_handle);
+}
+
+static void mock_debug_get_damage_visualization(
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_debug_get_damage_visualization(response_handle, FALSE);
+}
+
+static void mock_get_socket_paths(
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  g_autoptr(PigeonCompositorCompositorSocketsData) sockets =
+      pigeon_compositor_compositor_sockets_data_new("wayland-mock-0", "");
+  pigeon_compositor_compositor_host_api_respond_get_socket_paths(response_handle, sockets);
+}
+
+static void mock_compositor_ready(
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  g_message("Mock Pigeon: Received compositor_ready from Flutter");
+  int win_w = 1280, win_h = 720;
+  get_current_window_size(&win_w, &win_h);
+  send_output_added(1, "WL-1", win_w, win_h, 60000, 1.0);
+  pigeon_compositor_compositor_host_api_respond_compositor_ready(response_handle);
+}
+
+static void mock_is_compositor(
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_is_compositor(response_handle, TRUE);
+}
+
+static void mock_surface_keyboard_key(
+    int64_t surface_handle, int64_t keycode, int64_t status, int64_t timestamp_micros,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_keyboard_key(response_handle);
+}
+
+static void mock_surface_pointer_event(
+    FlValue* data,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_surface_pointer_event(response_handle);
+}
+
+static void mock_popup_pointer_event(
+    FlValue* data,
+    PigeonCompositorCompositorHostApiResponseHandle* response_handle,
+    gpointer user_data) {
+  pigeon_compositor_compositor_host_api_respond_popup_pointer_event(response_handle);
+}
+
+static const PigeonCompositorCompositorHostApiVTable kCompositorHostApiVTable = {
+  .surface_request_resize = mock_surface_request_resize,
+  .surface_end_resize = mock_surface_end_resize,
+  .surface_toplevel_set_size = mock_surface_toplevel_set_size,
+  .surface_toplevel_set_maximized = mock_surface_toplevel_set_maximized,
+  .surface_toplevel_close = mock_surface_toplevel_close,
+  .surface_focus = mock_surface_focus,
+  .surface_clear_focus = mock_surface_clear_focus,
+  .surface_set_position = mock_surface_set_position,
+  .force_render_all_views = mock_force_render_all_views,
+  .set_direct_input_mode = mock_set_direct_input_mode,
+  .set_primary_output = mock_set_primary_output,
+  .set_vsync_output = mock_set_vsync_output,
+  .set_vsync_rate_limit = mock_set_vsync_rate_limit,
+  .set_output_mode = mock_set_output_mode,
+  .set_output_position = mock_set_output_position,
+  .set_output_scale = mock_set_output_scale,
+  .debug_set_damage_visualization = mock_debug_set_damage_visualization,
+  .debug_get_damage_visualization = mock_debug_get_damage_visualization,
+  .get_socket_paths = mock_get_socket_paths,
+  .compositor_ready = mock_compositor_ready,
+  .is_compositor = mock_is_compositor,
+  .surface_keyboard_key = mock_surface_keyboard_key,
+  .surface_pointer_event = mock_surface_pointer_event,
+  .popup_pointer_event = mock_popup_pointer_event,
+};
 
 static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
                            gpointer user_data) {
@@ -638,6 +875,12 @@ void wlroots_mock_plugin_register(FlPluginRegistry *registry, GtkWindow *window,
   FlBinaryMessenger *messenger = fl_plugin_registrar_get_messenger(registrar);
   s_texture_registrar = fl_plugin_registrar_get_texture_registrar(registrar);
 
+  // Initialize Pigeon Flutter API and Host API handlers
+  s_flutter_api = pigeon_compositor_compositor_flutter_api_new(messenger, nullptr);
+  pigeon_compositor_compositor_host_api_set_method_handlers(
+      messenger, nullptr, &kCompositorHostApiVTable, nullptr, nullptr);
+
+  // Keep legacy method channel for mock_spawn_surface or fallback
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   s_channel =
       fl_method_channel_new(messenger, "wlroots", FL_METHOD_CODEC(codec));
@@ -657,6 +900,6 @@ void wlroots_mock_plugin_register(FlPluginRegistry *registry, GtkWindow *window,
                      G_CALLBACK(on_window_size_allocate), nullptr);
   }
 
-  g_message("Mock: wlroots MethodChannel plugin registered successfully! "
+  g_message("Mock: wlroots Pigeon & MethodChannel plugin registered successfully! "
             "[F1=Spawn app, F2=Close app]");
 }

@@ -1,5 +1,4 @@
 #include "util/realtime.hpp"
-#include <cerrno>
 #include <cstring>
 #include <pthread.h>
 #include <sched.h>

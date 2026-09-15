@@ -1,4 +1,5 @@
-#pragma once
+#ifndef REALTIME_HPP
+#define REALTIME_HPP
 
 #include <cstdint>
 
@@ -12,3 +13,5 @@
  * @return true if realtime scheduling was successfully applied, false otherwise.
  */
 bool sparrow_enable_realtime_scheduling(int priority = 20);
+
+#endif // REALTIME_HPP

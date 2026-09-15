@@ -15,6 +15,7 @@
 #include "popup.hpp"
 #include "sub_surface.hpp"
 #include "surface.hpp"
+#include "util/trace.hpp"
 #include "view.hpp"
 
 static uint32_t next_handle()
@@ -105,6 +106,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data)
     SparrowView *view = wl_container_of(listener, view, unmap);
     Core *instance    = Core::instance();
     uint32_t handle   = view->handle;
+    view->activated = false;
 
     if (instance->seat && view->xdg_surface &&
         (instance->seat->pointer_state.focused_surface ==
@@ -213,6 +215,7 @@ static void xdg_toplevel_set_app_id(struct wl_listener *listener, void *data)
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
 {
+    SPARROW_TRACE_SCOPE("compositor", "xdg_toplevel_commit");
     SparrowView *view = wl_container_of(listener, view, commit);
 
     struct wlr_box geo = view->xdg_surface->current.geometry;
@@ -358,11 +361,13 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
 
     pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
-    // Trigger Flutter texture updates and output damage for any mapped view
+    // Trigger Flutter texture updates and output damage for visible mapped views
     if (view->xdg_surface && view->xdg_surface->surface &&
         view->xdg_surface->surface->mapped)
     {
-        if (view->texture_registered)
+        bool is_visible = sparrow_view_is_visible(view);
+
+        if (is_visible && view->texture_registered)
         {
             instance->embedder_api.MarkExternalTextureFrameAvailable(
                 instance->engine, view->texture_id);
@@ -374,36 +379,40 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
 
         if (pixman_region32_not_empty(&damage))
         {
-            if (instance->show_fps)
+            if (is_visible)
             {
-                struct timespec ts;
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                uint64_t now_us =
-                    (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
-                instance->record_client_commit(now_us);
-            }
+                if (instance->show_fps)
+                {
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    uint64_t now_us =
+                        (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
+                    instance->record_client_commit(now_us);
+                }
 
-            int nrects = 0;
-            pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
-            if (instance->debug_protocol)
-            {
-                wlr_log(WLR_DEBUG, "XDG COMMIT view %d: damage nrects=%d (%d,%d %dx%d)",
-                    view->handle, nrects, rects[0].x1, rects[0].y1,
-                    rects[0].x2 - rects[0].x1, rects[0].y2 - rects[0].y1);
-            }
+                int nrects = 0;
+                pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
+                if (instance->debug_protocol)
+                {
+                    wlr_log(WLR_DEBUG, "XDG COMMIT view %d: damage nrects=%d (%d,%d %dx%d)",
+                        view->handle, nrects, rects[0].x1, rects[0].y1,
+                        rects[0].x2 - rects[0].x1, rects[0].y2 - rects[0].y1);
+                }
 
-            for (int i = 0; i < nrects; ++i)
-            {
-                sparrow_view_damage_add_rect(view, rects[i].x1, rects[i].y1,
-                    rects[i].x2 - rects[i].x1,
-                    rects[i].y2 - rects[i].y1);
+                for (int i = 0; i < nrects; ++i)
+                {
+                    sparrow_view_damage_add_rect(view, rects[i].x1, rects[i].y1,
+                        rects[i].x2 - rects[i].x1,
+                        rects[i].y2 - rects[i].y1);
+                }
             }
         }
 
         pixman_region32_fini(&damage);
     }
 
-    if (!view->toplevel->base->initialized ||
+    if ((view->toplevel == nullptr) || (view->toplevel->base == nullptr) ||
+        !view->toplevel->base->initialized ||
         !view->toplevel->base->initial_commit)
     {
         return;

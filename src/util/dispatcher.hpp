@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DISPATCHER_HPP
+#define DISPATCHER_HPP
 
 #include <functional>
 #include <sparrow/nonstd/wlroots-full.hpp>
@@ -18,3 +19,5 @@ void sparrow_dispatcher_finish();
  * any thread (Flutter UI, Isolate, worker threads).
  */
 void sparrow_dispatch_to_wayland(std::function<void()> task);
+
+#endif // DISPATCHER_HPP

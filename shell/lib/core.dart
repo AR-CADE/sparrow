@@ -9,7 +9,7 @@ const double minFraction = 0.5;
 List<Surface> surfaces = [];
 
 class CustomScrollBehavior extends MaterialScrollBehavior {
-  const CustomScrollBehavior();
+  const new();
   @override
   Set<PointerDeviceKind> get dragDevices => {
     PointerDeviceKind.mouse,
@@ -31,7 +31,7 @@ const draggableSurfaceHeight = 30;
 const radiusAnimationAccel = 15;
 
 class CustomPageController extends PageController {
-  CustomPageController({super.viewportFraction});
+  new({super.viewportFraction});
   @override
   double get viewportFraction => _viewportFraction;
   double _viewportFraction = 1;

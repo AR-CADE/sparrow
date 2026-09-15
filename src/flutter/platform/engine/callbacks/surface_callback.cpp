@@ -1,10 +1,8 @@
-#include "flutter_embedder.h"
 #include <core.hpp>
 #include <surface/view.hpp>
 #include <surface/sub_surface.hpp>
 #include <surface/popup.hpp>
 #include <flutter/platform/engine/messages/surface_message.hpp>
-#include "flutter/platform/messages.hpp"
 #include "surface_callback.hpp"
 
 void handle_foreign_activate_request(struct wl_listener *listener,
@@ -40,7 +38,7 @@ void handle_foreign_maximize_request(struct wl_listener *listener,
         static_cast<struct wlr_foreign_toplevel_handle_v1_maximized_event*>(data);
     wlr_log(WLR_INFO, "Foreign toplevel requested maximize=%d for view %d",
         event->maximized, view->handle);
-    if (view->toplevel)
+    if (view->toplevel && view->xdg_surface && view->xdg_surface->initialized)
     {
         view->maximized = event->maximized;
         wlr_xdg_toplevel_set_maximized(view->toplevel, event->maximized);
@@ -90,7 +88,8 @@ void sparrow_handle_surface_focus(uint32_t surface_handle)
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(surface_handle);
-    if (!view)
+    if (!view || !view->xdg_surface || !view->xdg_surface->surface ||
+        !view->xdg_surface->surface->mapped || !view->xdg_surface->initialized)
     {
         return;
     }
@@ -187,7 +186,7 @@ void sparrow_handle_surface_toplevel_set_maximized(uint32_t surface_handle, bool
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(surface_handle);
-    if (!view)
+    if (!view || !view->xdg_surface || !view->xdg_surface->initialized || !view->toplevel)
     {
         return;
     }
@@ -214,7 +213,7 @@ void sparrow_handle_surface_toplevel_set_size(uint32_t surface_handle, int width
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(surface_handle);
-    if (!view)
+    if (!view || !view->xdg_surface || !view->xdg_surface->initialized || !view->toplevel)
     {
         return;
     }
@@ -231,7 +230,7 @@ void sparrow_handle_surface_request_resize(uint32_t surface_handle, int width, i
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(surface_handle);
-    if (!view)
+    if (!view || !view->xdg_surface || !view->xdg_surface->initialized || !view->toplevel)
     {
         return;
     }
@@ -249,10 +248,9 @@ void sparrow_handle_surface_request_resize(uint32_t surface_handle, int width, i
     if (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL)
     {
         wlr_xdg_toplevel_set_resizing(view->toplevel, true);
+        // Send configure with new size
+        wlr_xdg_toplevel_set_size(view->toplevel, width, height);
     }
-
-    // Send configure with new size
-    wlr_xdg_toplevel_set_size(view->toplevel, width, height);
 }
 
 void sparrow_handle_surface_end_resize(uint32_t surface_handle)
@@ -260,7 +258,7 @@ void sparrow_handle_surface_end_resize(uint32_t surface_handle)
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(surface_handle);
-    if (!view)
+    if (!view || !view->xdg_surface || !view->xdg_surface->initialized || !view->toplevel)
     {
         return;
     }

@@ -175,6 +175,7 @@ extern "C" {
 #include <wlr/backend/wayland.h>
 #include <wlr/types/wlr_keyboard_group.h>
 
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 // #define _wlr_log(verbosity, format, ...) _WLR_ATTRIB_PRINTF(2, 3);
 }
 

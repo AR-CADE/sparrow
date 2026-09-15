@@ -9,10 +9,7 @@ import 'package:material_ui/material_ui.dart' show PointerEvent, Size;
 /// Follows the same pattern as CompositorPlatformViewController but uses
 /// popup_pointer_event channel method.
 class PopupPlatformViewController with PointerEventEncoder {
-  const PopupPlatformViewController({
-    required this.popup,
-    this.ratio = 1.0,
-  });
+  const new({required this.popup, this.ratio = 1.0});
   final Popup popup;
   final double ratio;
 
@@ -32,9 +29,6 @@ class PopupPlatformViewController with PointerEventEncoder {
       widgetSize: size,
     );
 
-    await CompositorRepository().platform.channel.invokeMethod(
-      'popup_pointer_event',
-      data,
-    );
+    await CompositorRepository().platform.popupPointerEvent(data);
   }
 }

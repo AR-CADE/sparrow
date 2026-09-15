@@ -2,9 +2,9 @@ name: Sparrow CI & Headless Test Bot
 
 on:
   push:
-    branches: [ master, main, '0.*', 'release/*' ]
+    branches: [master, main, "0.*", "release/*"]
   pull_request:
-    branches: [ master, main, '0.*', 'release/*' ]
+    branches: [master, main, "0.*", "release/*"]
 
 jobs:
   test_cpp_code_style:
@@ -38,7 +38,6 @@ jobs:
     defaults:
       run:
         shell: bash
-
 
     steps:
       - name: Install Git and setup environment
@@ -78,7 +77,7 @@ jobs:
         run: |
           export PATH="$HOME/.local/share/flutter/bin:$PATH"
           flutter --version
-          ./build.sh release
+          ./build.sh optimize
 
       - name: Verify Sparrow Build & Bundle Artifacts
         run: |

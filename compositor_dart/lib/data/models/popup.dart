@@ -7,7 +7,7 @@ part 'popup.g.dart';
 @JsonSerializable()
 /// Popup surface (menus, dropdowns, tooltips)
 class Popup extends Equatable {
-  const Popup({
+  const new({
     required this.handle,
     required this.textureId,
     required this.parentHandle,
@@ -24,7 +24,7 @@ class Popup extends Equatable {
        outputId = outputId ?? 0,
        outputScale = outputScale ?? 1.0;
 
-  factory Popup.fromJson(Map<String, dynamic> json) => _$PopupFromJson(json);
+  factory fromJson(Map<String, dynamic> json) => _$PopupFromJson(json);
 
   final int handle;
   @JsonKey(name: 'texture_id')

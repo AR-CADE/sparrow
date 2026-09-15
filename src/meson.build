@@ -17,6 +17,8 @@ sparrow_sources = [
   'flutter/platform/messages.cpp',
   'flutter/platform/task.cpp',
   'flutter/platform/text_input.cpp',
+  'flutter/platform/key_mapping.cpp',
+  'flutter/platform/keyboard_channel.cpp',
 
   'flutter/platform/engine/callbacks/seat_callback.cpp',
   'flutter/platform/engine/callbacks/surface_callback.cpp',
@@ -39,6 +41,8 @@ sparrow_sources = [
   'util/realtime.cpp',
   'util/udmabuf.cpp',
   'util/rethreading/callable_queue.cpp',
+  'ipc/ipc_server.cpp',
+  'util/trace.cpp',
 ]
 
 sparrow_dependencies = [
@@ -55,6 +59,8 @@ sparrow_dependencies = [
   xcb,
   embedder,
   libplatform,
+  perfetto_dep,
+  dl_dep,
 ]
 
 sparrow_inc = [
@@ -80,5 +86,8 @@ executable('sparrow', ['main.cpp'],
     build_rpath: '$ORIGIN/shell/lib:$ORIGIN/../subprojects/wlroots',
     install_rpath: '$ORIGIN/shell/lib:$ORIGIN/../lib',
     install: true)
+
+subdir('runner')
+
 
 

@@ -7,9 +7,9 @@ part 'compositor_event.g.dart';
 
 @JsonSerializable()
 class CompositorEvent extends Equatable {
-  const CompositorEvent({required this.type, required this.event});
+  const new({required this.type, required this.event});
 
-  factory CompositorEvent.fromJson(Map<String, dynamic> json) =>
+  factory fromJson(Map<String, dynamic> json) =>
       _$CompositorEventFromJson(json);
   final CompositorEventType type;
   final dynamic event;

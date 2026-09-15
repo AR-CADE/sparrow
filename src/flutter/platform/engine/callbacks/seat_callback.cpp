@@ -502,7 +502,8 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
             wlr_seat_pointer_notify_frame(instance->seat);
             wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
                 instance->seat);
-        } else if (message.event_type == pointerExitEvent)
+        } else if ((message.event_type == pointerExitEvent) ||
+                   (message.event_type == pointerPanZoomStartEvent))
         {
             // Don't clear focus on popup exit - let the parent or next popup handle
             // it
@@ -631,11 +632,6 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
                 }
             }
 
-            wlr_seat_pointer_notify_frame(instance->seat);
-            wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
-                instance->seat);
-        } else if (message.event_type == pointerPanZoomStartEvent)
-        {
             wlr_seat_pointer_notify_frame(instance->seat);
             wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
                 instance->seat);
@@ -801,9 +797,13 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
         }
     }
 
+    uint32_t keycode = (message.keycode >= 8) ? (message.keycode - 8) : message.keycode;
+    wlr_log(WLR_INFO,
+        "[KEY] sparrow_handle_surface_keyboard_key: surface=%u, keycode=%u (evdev=%u), state=%d",
+        message.surface_handle, (uint32_t)message.keycode, keycode, (int)state);
     wlr_seat_keyboard_notify_key(instance->seat,
         (uint32_t)(message.timestamp / 1000),
-        (uint32_t)message.keycode, state);
+        keycode, state);
 }
 
 void sparrow_handle_surface_begin_move(uint32_t surface_handle)

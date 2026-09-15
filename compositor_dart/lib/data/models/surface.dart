@@ -6,7 +6,7 @@ part 'surface.g.dart';
 
 @JsonSerializable()
 class Surface extends Equatable {
-  const Surface({
+  const new({
     required this.handle,
     required this.pid,
     required this.gid,
@@ -46,8 +46,7 @@ class Surface extends Equatable {
        minHeight = minHeight ?? 0,
        maxHeight = maxHeight ?? 0;
 
-  factory Surface.fromJson(Map<String, dynamic> json) =>
-      _$SurfaceFromJson(json);
+  factory fromJson(Map<String, dynamic> json) => _$SurfaceFromJson(json);
 
   Map<String, dynamic> toJson() => _$SurfaceToJson(this);
 

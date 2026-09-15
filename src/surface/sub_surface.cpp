@@ -55,7 +55,7 @@ static void sparrow_subsurface_handle_map(struct wl_listener *listener, void *da
     // Register external texture
     // Offset subsurface texture IDs by 100000 to avoid collision with view
     // texture IDs
-    sub->texture_id = (int64_t)(100000 + sub->handle);
+    sub->texture_id = 100000LL + sub->handle;
     FlutterEngineResult result = instance->embedder_api.RegisterExternalTexture(
         instance->engine, sub->texture_id);
     if (result == kSuccess)
@@ -220,8 +220,10 @@ static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void 
     // Notify Flutter and add damage for any mapped subsurface
     if (sub->surface && sub->surface->mapped)
     {
+        bool is_visible = !sub->parent_view || sparrow_view_is_visible(sub->parent_view);
+
         // Notify Flutter that texture has new frame
-        if (sub->texture_registered)
+        if (is_visible && sub->texture_registered)
         {
             instance->embedder_api.MarkExternalTextureFrameAvailable(instance->engine,
                 sub->texture_id);
@@ -233,21 +235,24 @@ static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void 
 
         if (pixman_region32_not_empty(&damage))
         {
-            if (instance->show_fps)
+            if (is_visible)
             {
-                struct timespec ts;
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
-                instance->record_client_commit(now_us);
-            }
+                if (instance->show_fps)
+                {
+                    struct timespec ts;
+                    clock_gettime(CLOCK_MONOTONIC, &ts);
+                    uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
+                    instance->record_client_commit(now_us);
+                }
 
-            int nrects = 0;
-            pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
-            for (int i = 0; i < nrects; ++i)
-            {
-                sparrow_subsurface_damage_add_rect(
-                    sub, rects[i].x1, rects[i].y1,
-                    rects[i].x2 - rects[i].x1, rects[i].y2 - rects[i].y1);
+                int nrects = 0;
+                pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
+                for (int i = 0; i < nrects; ++i)
+                {
+                    sparrow_subsurface_damage_add_rect(
+                        sub, rects[i].x1, rects[i].y1,
+                        rects[i].x2 - rects[i].x1, rects[i].y2 - rects[i].y1);
+                }
             }
         }
 

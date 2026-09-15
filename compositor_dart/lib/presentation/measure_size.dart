@@ -5,11 +5,7 @@ import 'package:material_ui/material_ui.dart'
     show BuildContext, RenderObject, SingleChildRenderObjectWidget, Widget;
 
 class MeasureSize extends SingleChildRenderObjectWidget {
-  const MeasureSize({
-    required this.onChange,
-    required Widget super.child,
-    super.key,
-  });
+  const new({required this.onChange, required Widget super.child, super.key});
   final OnWidgetSizeChange onChange;
 
   @override

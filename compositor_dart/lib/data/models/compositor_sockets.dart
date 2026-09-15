@@ -5,9 +5,9 @@ part 'compositor_sockets.g.dart';
 
 @JsonSerializable()
 class CompositorSockets extends Equatable {
-  const CompositorSockets({required this.wayland, required this.x});
+  const new({required this.wayland, required this.x});
 
-  factory CompositorSockets.fromJson(Map<String, dynamic> json) =>
+  factory fromJson(Map<String, dynamic> json) =>
       _$CompositorSocketsFromJson(json);
   final String wayland;
   final String x;

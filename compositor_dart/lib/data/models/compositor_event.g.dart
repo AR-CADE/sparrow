@@ -6,11 +6,10 @@ part of 'compositor_event.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-CompositorEvent _$CompositorEventFromJson(Map<String, dynamic> json) =>
-    CompositorEvent(
-      type: $enumDecode(_$CompositorEventTypeEnumMap, json['type']),
-      event: json['event'],
-    );
+CompositorEvent _$CompositorEventFromJson(Map json) => CompositorEvent(
+  type: $enumDecode(_$CompositorEventTypeEnumMap, json['type']),
+  event: json['event'],
+);
 
 Map<String, dynamic> _$CompositorEventToJson(CompositorEvent instance) =>
     <String, dynamic>{
@@ -41,4 +40,6 @@ const _$CompositorEventTypeEnumMap = {
   CompositorEventType.gestureSwipeUpdate: 'gestureSwipeUpdate',
   CompositorEventType.gestureSwipeEnd: 'gestureSwipeEnd',
   CompositorEventType.surfaceRequestActivate: 'surfaceRequestActivate',
+  CompositorEventType.zoomScroll: 'zoomScroll',
+  CompositorEventType.zoomKey: 'zoomKey',
 };

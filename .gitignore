@@ -64,6 +64,9 @@
 /subprojects/*
 !/subprojects/*.wrap
 !/subprojects/flutter_embedder/
+!/subprojects/perfetto/
+subprojects/perfetto/perfetto.h
+subprojects/perfetto/perfetto.cc
 
 ### Ninja ###
 .ninja_deps
@@ -86,3 +89,4 @@ build/**
 /fyucha
 /flutter
 *.log
+ROADMAP.md

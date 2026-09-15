@@ -16,7 +16,7 @@ import 'package:shell/background_shader_painter.dart'
     show BackgroundShaderPainter;
 
 class BackgroundShader extends StatefulWidget {
-  const BackgroundShader({super.key});
+  const new({super.key});
 
   @override
   State<BackgroundShader> createState() => _BackgroundShaderState();

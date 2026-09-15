@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <string>
 
@@ -39,7 +40,7 @@ void sparrow_select_highest_refresh_output()
     Output *output = nullptr;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (!output || !output->wlr_output)
+        if (!output->wlr_output)
         {
             continue;
         }
@@ -102,7 +103,7 @@ void sparrow_damage_add_box(const struct wlr_box *box, bool is_client_damage)
     Output *output;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (!output || !output->wlr_output || !output->wlr_output->enabled)
+        if (!output->wlr_output || !output->wlr_output->enabled)
         {
             continue;
         }
@@ -121,6 +122,15 @@ void sparrow_damage_add_box(const struct wlr_box *box, bool is_client_damage)
                 local_box.y     = intersection.y - output_box.y;
                 local_box.width = intersection.width;
                 local_box.height = intersection.height;
+
+                if (output->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
+                {
+                    int tw = 0, th = 0;
+                    wlr_output_transformed_resolution(output->wlr_output, &tw, &th);
+                    wlr_box_transform(&local_box, &local_box,
+                        wlr_output_transform_invert(output->wlr_output->transform),
+                        tw, th);
+                }
 
                 pthread_mutex_lock(&output->damage_mutex);
                 wlr_damage_ring_add_box(&output->damage_ring, &local_box);
@@ -182,11 +192,6 @@ void sparrow_set_vsync_output(uint32_t output_id)
     Output *output = nullptr;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (!output)
-        {
-            continue;
-        }
-
         if (output->id == output_id)
         {
             instance->vsync_output = output;
@@ -215,11 +220,6 @@ static Output *find_output_by_id(uint32_t output_id)
     Output *output = nullptr;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (!output)
-        {
-            continue;
-        }
-
         if (output->id == output_id)
         {
             return output;
@@ -251,11 +251,6 @@ Output *sparrow_output_for_box(int x, int y, int width,
     Output *output = nullptr;
     wl_list_for_each(output, &instance->outputs, link)
     {
-        if (!output)
-        {
-            continue;
-        }
-
         if (output->wlr_output == wlr_out)
         {
             return output;
@@ -542,7 +537,8 @@ static void render_cursor(struct wlr_render_pass *render_pass,
     };
     if (viewport->transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&cursor_box, &cursor_box, viewport->transform,
+        wlr_box_transform(&cursor_box, &cursor_box,
+            wlr_output_transform_invert(viewport->transform),
             viewport->width, viewport->height);
     }
 
@@ -571,7 +567,7 @@ static void send_frame_done_iterator(struct wlr_surface *surface, int sx,
     wlr_surface_send_frame_done(surface, now);
 }
 
-static SparrowView *sparrow_output_find_fullscreen_candidate(Output *output)
+static SparrowView *sparrow_output_find_fullscreen_candidate(const Output *output)
 {
     Core *instance = Core::instance();
     if (!output || !output->wlr_output || !output->wlr_output->enabled)
@@ -591,7 +587,7 @@ static SparrowView *sparrow_output_find_fullscreen_candidate(Output *output)
     {
         for (const auto &[handle, value] : *instance->popups)
         {
-            auto *popup = static_cast<SparrowPopup*>(value);
+            const auto *popup = static_cast<SparrowPopup*>(value);
             if (popup && popup->xdg_surface && popup->xdg_surface->surface &&
                 popup->xdg_surface->surface->mapped)
             {
@@ -610,7 +606,7 @@ static SparrowView *sparrow_output_find_fullscreen_candidate(Output *output)
     SparrowView *view = nullptr;
     wl_list_for_each(view, &instance->views_list, link)
     {
-        if (!view || !view->xdg_surface || !view->xdg_surface->surface)
+        if (!view->xdg_surface || !view->xdg_surface->surface)
         {
             continue;
         }
@@ -628,11 +624,11 @@ static SparrowView *sparrow_output_find_fullscreen_candidate(Output *output)
         // Only an ACTIVATED, FULLSCREEN window WITHOUT SSD titlebar/decorations can be a direct candidate
         if (view->fullscreen && view->activated && !view->uses_ssd)
         {
-            struct wlr_buffer *target_buf = view->locked_buffer;
+            const struct wlr_buffer *target_buf = view->locked_buffer;
             SparrowSubSurface *sub = nullptr;
             wl_list_for_each(sub, &view->subsurfaces, link)
             {
-                if (sub && sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
+                if (sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
                 {
                     target_buf = sub->locked_buffer;
                     break;
@@ -931,7 +927,7 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
 
     double client_fps = instance->get_client_fps(now_us);
 
-    const char *buf_tag = "";
+    const char *buf_tag;
     if (instance->buffering_mode == Core::BUFFERING_DOUBLE)
     {
         buf_tag = " | DB";
@@ -962,6 +958,20 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
         snprintf(text, sizeof(text), "0.0 FPS | 0.0ms%s%s", buf_tag, scanout_tag);
     }
 
+    if ((output == instance->vsync_output) || (instance->vsync_output == nullptr))
+    {
+        static double last_logged_fps = -1.0;
+        static uint64_t last_fps_log_time_us = 0;
+        if ((now_us - last_fps_log_time_us >= 1000000ULL) ||
+            ((last_logged_fps > 0.0) && (client_fps == 0.0)) ||
+            ((last_logged_fps == 0.0) && (client_fps > 0.0)))
+        {
+            last_fps_log_time_us = now_us;
+            last_logged_fps = client_fps;
+            wlr_log(WLR_INFO, "[FPS] %s", text);
+        }
+    }
+
     int text_len = 0;
     for (const char *p = text; *p != '\0'; ++p)
     {
@@ -990,7 +1000,7 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
 
         strncpy(output->last_osd_text, text, sizeof(output->last_osd_text) - 1);
 
-        std::vector<uint32_t> pixels(box_w * box_h);
+        std::vector<uint32_t> pixels(static_cast<size_t>(box_w) * static_cast<size_t>(box_h));
         uint32_t bg_color     = 0xD80D141F; // Dark translucent pill
         uint32_t border_color = 0x9900CCFF; // Cyan border
 
@@ -1140,6 +1150,11 @@ static void render_fps_osd(struct wlr_render_pass *render_pass, Output *output,
 static void output_frame(struct wl_listener *listener, void *data)
 {
     SPARROW_TRACE_SCOPE("Output::output_frame");
+#if defined (SPARROW_ENABLE_TRACE)
+    static uint32_t s_frame_index = 0;
+    s_frame_index++;
+    SparrowTrace::instance().start_renderdoc_frame_if_requested(s_frame_index);
+#endif
     Output *output = wl_container_of(listener, output, frame);
     Core *instance = Core::instance();
     struct wlr_output *wlr_output = output->wlr_output;
@@ -1190,10 +1205,11 @@ static void output_frame(struct wl_listener *listener, void *data)
         SparrowView *view = nullptr;
         wl_list_for_each(view, &instance->views_list, link)
         {
-            if (view && (view->xdg_surface != nullptr) &&
+            if ((view->xdg_surface != nullptr) &&
                 (view->xdg_surface->surface != nullptr) &&
                 view->xdg_surface->surface->mapped &&
-                ((view->current_output == output) || (view->current_output == nullptr)))
+                ((view->current_output == output) || (view->current_output == nullptr)) &&
+                sparrow_view_is_visible(view))
             {
                 wlr_surface_for_each_surface(view->xdg_surface->surface,
                     send_frame_done_iterator, &now);
@@ -1207,7 +1223,8 @@ static void output_frame(struct wl_listener *listener, void *data)
                 auto *popup = static_cast<SparrowPopup*>(value);
                 if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                     (popup->xdg_surface->surface != nullptr) &&
-                    popup->xdg_surface->surface->mapped)
+                    popup->xdg_surface->surface->mapped &&
+                    (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
                 {
                     wlr_surface_for_each_surface(popup->xdg_surface->surface,
                         send_frame_done_iterator, &now);
@@ -1280,7 +1297,7 @@ static void output_frame(struct wl_listener *listener, void *data)
         SparrowSubSurface *sub = nullptr;
         wl_list_for_each(sub, &fs_view->subsurfaces, link)
         {
-            if (sub && sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
+            if (sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
             {
                 target_buf     = sub->locked_buffer;
                 target_surface = sub->surface;
@@ -1332,8 +1349,15 @@ static void output_frame(struct wl_listener *listener, void *data)
                 bool submit_ok = wlr_render_pass_submit(direct_pass);
                 if (submit_ok)
                 {
-                    wlr_surface_for_each_surface(fs_view->xdg_surface->surface,
-                        send_presentation_iterator, wlr_output);
+                    /// TODO(cparm): fix this, see L1282,
+                    /// Condition 'target_surface!=nullptr' is always trueCppCheck
+                    // (c-cpp-flylint)(knownConditionTrueFalse)
+                    if (target_surface != nullptr)
+                    {
+                        wlr_surface_for_each_surface(target_surface,
+                            send_presentation_iterator, wlr_output);
+                    }
+
                     wlr_output_commit_state(wlr_output, &direct_blit_state);
                     wlr_output_state_finish(&direct_blit_state);
 
@@ -1371,8 +1395,11 @@ static void output_frame(struct wl_listener *listener, void *data)
 
                     struct timespec ts_done;
                     clock_gettime(CLOCK_MONOTONIC, &ts_done);
-                    wlr_surface_for_each_surface(fs_view->xdg_surface->surface,
-                        send_frame_done_iterator, &ts_done);
+                    if (target_surface != nullptr)
+                    {
+                        wlr_surface_for_each_surface(target_surface,
+                            send_frame_done_iterator, &ts_done);
+                    }
 
                     pixman_region32_fini(&render_damage);
                     pixman_region32_fini(&frame_damage);
@@ -1590,10 +1617,11 @@ static void output_frame(struct wl_listener *listener, void *data)
     SparrowView *view = nullptr;
     wl_list_for_each(view, &instance->views_list, link)
     {
-        if (view && (view->xdg_surface != nullptr) &&
+        if ((view->xdg_surface != nullptr) &&
             (view->xdg_surface->surface != nullptr) &&
             view->xdg_surface->surface->mapped &&
-            ((view->current_output == output) || (view->current_output == nullptr)))
+            ((view->current_output == output) || (view->current_output == nullptr)) &&
+            sparrow_view_is_visible(view))
         {
             wlr_surface_for_each_surface(view->xdg_surface->surface,
                 send_presentation_iterator, wlr_output);
@@ -1606,7 +1634,8 @@ static void output_frame(struct wl_listener *listener, void *data)
             auto *popup = static_cast<SparrowPopup*>(value);
             if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                 (popup->xdg_surface->surface != nullptr) &&
-                popup->xdg_surface->surface->mapped)
+                popup->xdg_surface->surface->mapped &&
+                (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
             {
                 wlr_surface_for_each_surface(popup->xdg_surface->surface,
                     send_presentation_iterator, wlr_output);
@@ -1620,6 +1649,10 @@ static void output_frame(struct wl_listener *listener, void *data)
         wlr_output_commit_state(wlr_output, &output_state);
         wlr_output_state_finish(&output_state);
     }
+
+#if defined (SPARROW_ENABLE_TRACE)
+    SparrowTrace::instance().end_renderdoc_frame_if_capturing(s_frame_index);
+#endif
 
     output->flip_count++;
     double flip_dt_ms = (output->last_flip_time_us > 0) ?
@@ -1646,7 +1679,7 @@ static void output_frame(struct wl_listener *listener, void *data)
         SparrowView *active_view = nullptr;
         wl_list_for_each(active_view, &instance->views_list, link)
         {
-            if (active_view && (active_view->commit_count > 0))
+            if (active_view->commit_count > 0)
             {
                 const char *app = (active_view->toplevel &&
                     active_view->toplevel->app_id) ? active_view->toplevel->app_id : "app";
@@ -1685,10 +1718,11 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     wl_list_for_each(view, &instance->views_list, link)
     {
-        if (view && (view->xdg_surface != nullptr) &&
+        if ((view->xdg_surface != nullptr) &&
             (view->xdg_surface->surface != nullptr) &&
             view->xdg_surface->surface->mapped &&
-            ((view->current_output == output) || (view->current_output == nullptr)))
+            ((view->current_output == output) || (view->current_output == nullptr)) &&
+            sparrow_view_is_visible(view))
         {
             wlr_surface_for_each_surface(view->xdg_surface->surface,
                 send_frame_done_iterator, &now);
@@ -1703,7 +1737,8 @@ static void output_frame(struct wl_listener *listener, void *data)
             auto *popup = static_cast<SparrowPopup*>(value);
             if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                 (popup->xdg_surface->surface != nullptr) &&
-                popup->xdg_surface->surface->mapped)
+                popup->xdg_surface->surface->mapped &&
+                (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
             {
                 wlr_surface_for_each_surface(popup->xdg_surface->surface,
                     send_frame_done_iterator, &now);
@@ -1736,6 +1771,18 @@ static void output_request_state(struct wl_listener *listener, void *data)
 
         if ((total_box.width > 0) && (total_box.height > 0))
         {
+            if (instance->cursor != nullptr)
+            {
+                double clamped_x = std::clamp(instance->cursor->x, 0.0,
+                    static_cast<double>(total_box.width - 1));
+                double clamped_y = std::clamp(instance->cursor->y, 0.0,
+                    static_cast<double>(total_box.height - 1));
+                if ((clamped_x != instance->cursor->x) || (clamped_y != instance->cursor->y))
+                {
+                    wlr_cursor_warp(instance->cursor, nullptr, clamped_x, clamped_y);
+                }
+            }
+
             FlutterWindowMetricsEvent window_metrics = {};
             window_metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
             window_metrics.width  = total_box.width;
@@ -1756,7 +1803,8 @@ static void output_request_state(struct wl_listener *listener, void *data)
             SparrowView *view;
             wl_list_for_each(view, &instance->views_list, link)
             {
-                if (view && (view->xdg_surface != nullptr) &&
+                if ((view->xdg_surface != nullptr) &&
+                    view->xdg_surface->initialized &&
                     (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
                     (view->toplevel != nullptr) && view->maximized)
                 {
@@ -1838,7 +1886,7 @@ void sparrow_engine_vsync_callback(void *data, intptr_t baton)
             Output *out = nullptr;
             wl_list_for_each(out, &instance->outputs, link)
             {
-                if (out && out->wlr_output && out->wlr_output->enabled)
+                if (out->wlr_output && out->wlr_output->enabled)
                 {
                     wlr_output_schedule_frame(out->wlr_output);
                 }
@@ -2040,13 +2088,16 @@ void sparrow_server_new_output(struct wl_listener *listener, void *data)
     wlr_output_state_set_enabled(&state, true);
 
     // Enable Adaptive Sync (VRR) if supported by the display hardware
-    wlr_output_state_set_adaptive_sync_enabled(&state, true);
-    if (!wlr_output_test_state(wlr_output, &state))
+    if (wlr_output->adaptive_sync_supported)
     {
-        wlr_output_state_set_adaptive_sync_enabled(&state, false);
-    } else
-    {
-        wlr_log(WLR_INFO, "Output %s: Adaptive Sync (VRR) enabled", wlr_output->name);
+        wlr_output_state_set_adaptive_sync_enabled(&state, true);
+        if (!wlr_output_test_state(wlr_output, &state))
+        {
+            wlr_output_state_set_adaptive_sync_enabled(&state, false);
+        } else
+        {
+            wlr_log(WLR_INFO, "Output %s: Adaptive Sync (VRR) enabled", wlr_output->name);
+        }
     }
 
     if (!wlr_output_commit_state(wlr_output, &state))
@@ -2184,7 +2235,8 @@ static void sanitize_output_state_for_backend(struct wlr_output *wlr_out,
     {
         bool current_adaptive =
             (wlr_out->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED);
-        if (state->adaptive_sync_enabled == current_adaptive)
+        if ((state->adaptive_sync_enabled == current_adaptive) ||
+            !wlr_out->adaptive_sync_supported)
         {
             state->committed &= ~WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED;
         }
@@ -2284,39 +2336,55 @@ static void handle_output_manager_apply(struct wl_listener *listener,
         struct wlr_box total_box = {};
         wlr_output_layout_get_box(instance->output_layout, nullptr, &total_box);
 
-        if (instance->engine != nullptr)
+        if ((total_box.width > 0) && (total_box.height > 0))
         {
-            FlutterWindowMetricsEvent window_metrics = {};
-            window_metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
-            window_metrics.width  = total_box.width;
-            window_metrics.height = total_box.height;
-            window_metrics.pixel_ratio = 1.0;
-            if (instance->embedder_api.SendWindowMetricsEvent != nullptr)
+            if (instance->cursor != nullptr)
             {
-                instance->embedder_api.SendWindowMetricsEvent(instance->engine,
-                    &window_metrics);
-            }
-
-            Output *output;
-            wl_list_for_each(output, &instance->outputs, link)
-            {
-                send_output_changed(output);
-            }
-
-            SparrowView *view;
-            wl_list_for_each(view, &instance->views_list, link)
-            {
-                if (view && (view->xdg_surface != nullptr) &&
-                    (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
-                    (view->toplevel != nullptr) && view->maximized)
+                double clamped_x = std::clamp(instance->cursor->x, 0.0,
+                    static_cast<double>(total_box.width - 1));
+                double clamped_y = std::clamp(instance->cursor->y, 0.0,
+                    static_cast<double>(total_box.height - 1));
+                if ((clamped_x != instance->cursor->x) || (clamped_y != instance->cursor->y))
                 {
-                    Output *out = view->current_output ? view->current_output :
-                        sparrow_get_first_output();
-                    if (out && out->wlr_output)
+                    wlr_cursor_warp(instance->cursor, nullptr, clamped_x, clamped_y);
+                }
+            }
+
+            if (instance->engine != nullptr)
+            {
+                FlutterWindowMetricsEvent window_metrics = {};
+                window_metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
+                window_metrics.width  = total_box.width;
+                window_metrics.height = total_box.height;
+                window_metrics.pixel_ratio = 1.0;
+                if (instance->embedder_api.SendWindowMetricsEvent != nullptr)
+                {
+                    instance->embedder_api.SendWindowMetricsEvent(instance->engine,
+                        &window_metrics);
+                }
+
+                Output *output;
+                wl_list_for_each(output, &instance->outputs, link)
+                {
+                    send_output_changed(output);
+                }
+
+                SparrowView *view;
+                wl_list_for_each(view, &instance->views_list, link)
+                {
+                    if ((view->xdg_surface != nullptr) &&
+                        view->xdg_surface->initialized &&
+                        (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+                        (view->toplevel != nullptr) && view->maximized)
                     {
-                        int eff_w = 0, eff_h = 0;
-                        wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
-                        wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                        Output *out = view->current_output ? view->current_output :
+                            sparrow_get_first_output();
+                        if (out && out->wlr_output)
+                        {
+                            int eff_w = 0, eff_h = 0;
+                            wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
+                            wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                        }
                     }
                 }
             }

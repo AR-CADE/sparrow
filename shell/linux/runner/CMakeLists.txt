@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.13)
 project(runner LANGUAGES CXX)
 
+# Set pigeon generated files directory
+set(PIGEON_COMPOSITOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../platform/pigeon/compositor/gobject")
+set(PLATFORM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../platform/include")
+
 # Define the application target. To change its name, change BINARY_NAME in the
 # top-level CMakeLists.txt, not the value here, or `flutter run` will no longer
 # work.
@@ -8,6 +12,7 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME}
   "main.cc"
+  "${PIGEON_COMPOSITOR_DIR}/messages.g.cc"
   "my_application.cc"
   "wlroots_mock_plugin.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -25,3 +30,5 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(${BINARY_NAME} PRIVATE "${PIGEON_COMPOSITOR_DIR}")
+target_include_directories(${BINARY_NAME} PRIVATE "${PLATFORM_INCLUDE_DIR}")

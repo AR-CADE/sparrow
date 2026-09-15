@@ -395,6 +395,20 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
         }
     }
 
+    // Intercept Super + Scroll for Wayfire/KDE style desktop zoom
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(instance->seat);
+    uint32_t mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+    if ((mods & WLR_MODIFIER_LOGO) != 0)
+    {
+        double delta = (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) ? event->delta : 0.0;
+        if (delta != 0.0)
+        {
+            send_zoom_scroll(delta, instance->cursor->x, instance->cursor->y);
+        }
+
+        return;
+    }
+
     const bool is_touchpad = (event->source == WL_POINTER_AXIS_SOURCE_FINGER) ||
         (event->source == WL_POINTER_AXIS_SOURCE_CONTINUOUS);
 
@@ -426,14 +440,25 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
 
     if (is_touchpad)
     {
+        // Standard GTK / Chromium multiplier (53.0 / 10.0 = 5.3), consistent with sparrow-app-runner.
+        const double kTrackpadHorizontalMultiplier = 5.3;
+
+        // In the compositor overview, the PageView uses viewportFraction = 0.5 (half-width cards)
+        // without pageSnapping, making full 5.3x acceleration feel overly slippery.
+        // Scaling by kTrackpadHorizontalMultiplier / 2.0 (~2.65x) provides smooth, responsive finger
+        // tracking.
+        scroll_delta_x *= (kTrackpadHorizontalMultiplier / 2.0);
+
         if (event->delta == 0.0)
         {
             if (instance->input.pan_started)
             {
                 send_flutter_trackpad_event(kPanZoomEnd, timestamp,
                     instance->input.pan_x,
-                    instance->input.pan_y, 1.0, 0.0);
+                    instance->input.pan_y, 0.0, 0.0);
                 instance->input.pan_started = false;
+                instance->input.pan_x = 0.0;
+                instance->input.pan_y = 0.0;
             }
         } else
         {
@@ -441,7 +466,7 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
             {
                 instance->input.pan_x = 0.0;
                 instance->input.pan_y = 0.0;
-                send_flutter_trackpad_event(kPanZoomStart, timestamp, 0.0, 0.0, 1.0,
+                send_flutter_trackpad_event(kPanZoomStart, timestamp, 0.0, 0.0, 0.0,
                     0.0);
                 instance->input.pan_started = true;
             }
@@ -744,7 +769,7 @@ void on_seat_request_set_cursor_shape(struct wl_listener *listener,
             Output *output = nullptr;
             wl_list_for_each(output, &instance->outputs, link)
             {
-                if (output && output->wlr_output && output->wlr_output->enabled &&
+                if (output->wlr_output && output->wlr_output->enabled &&
                     output->wlr_output->needs_frame)
                 {
                     wlr_output_schedule_frame(output->wlr_output);

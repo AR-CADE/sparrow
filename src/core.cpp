@@ -7,7 +7,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 
-#include <core.hpp>
+#include "core.hpp"
 
 #include <sparrow/nonstd/wlroots-full.hpp>
 #include <sparrow/options.hpp>
@@ -15,6 +15,7 @@
 #include "flutter/platform/cursor.hpp"
 #include "flutter/platform/engine.hpp"
 #include "flutter/platform/isolate.hpp"
+#include "flutter/platform/keyboard_channel.hpp"
 #include "flutter/platform/task.hpp"
 #include "flutter/platform/text_input.hpp"
 #include "input/keyboard.hpp"
@@ -29,7 +30,10 @@
 #include "util/dispatcher.hpp"
 #include "util/realtime.hpp"
 #include "util/udmabuf.hpp"
-#include <wlr/types/wlr_linux_dmabuf_v1.h>
+#include "ipc/ipc_server.hpp"
+#if defined (SPARROW_ENABLE_TRACE)
+    #include "util/trace.hpp"
+#endif
 
 struct rlimit user_maxfiles;
 
@@ -249,6 +253,16 @@ Core::~Core()
         wl_event_source_remove(fps_decay_timer);
         fps_decay_timer = nullptr;
     }
+
+    if (ipc_server)
+    {
+        delete ipc_server;
+        ipc_server = nullptr;
+    }
+
+#if defined (SPARROW_ENABLE_TRACE)
+    SparrowTrace::instance().finish();
+#endif
 }
 
 void Core::record_client_commit(uint64_t now_us)
@@ -264,6 +278,11 @@ void Core::record_client_commit(uint64_t now_us)
     {
         client_commit_count++;
     }
+
+    if (fps_decay_timer != nullptr)
+    {
+        wl_event_source_timer_update(fps_decay_timer, 150);
+    }
 }
 
 SparrowView*Core::find_view_by_handle(uint32_t handle)
@@ -276,7 +295,7 @@ SparrowView*Core::find_view_by_handle(uint32_t handle)
     SparrowView *v = nullptr;
     wl_list_for_each(v, &views_list, link)
     {
-        if (v && (v->handle == handle))
+        if (v->handle == handle)
         {
             return v;
         }
@@ -294,7 +313,7 @@ SparrowView*Core::find_view_by_toplevel(const struct wlr_xdg_toplevel *toplevel)
     SparrowView *v = nullptr;
     wl_list_for_each(v, &views_list, link)
     {
-        if (v && (v->toplevel == toplevel))
+        if (v->toplevel == toplevel)
         {
             return v;
         }
@@ -312,7 +331,7 @@ SparrowView*Core::find_view_by_wlr_surface(const struct wlr_surface *surface)
     SparrowView *v = nullptr;
     wl_list_for_each(v, &views_list, link)
     {
-        if (v && v->xdg_surface && (v->xdg_surface->surface == surface))
+        if (v->xdg_surface && (v->xdg_surface->surface == surface))
         {
             return v;
         }
@@ -330,7 +349,7 @@ SparrowView*Core::find_view_by_xdg_surface(const struct wlr_xdg_surface *xdg_sur
     SparrowView *v = nullptr;
     wl_list_for_each(v, &views_list, link)
     {
-        if (v && (v->xdg_surface == xdg_surface))
+        if (v->xdg_surface == xdg_surface)
         {
             return v;
         }
@@ -468,35 +487,35 @@ void Core::dump_surface_tree() const
         "\033[1;36m====================================================================\033[0m\n\n");
 }
 
-int Core::init(sparrow_options opts, bool allow_root)
+int Core::init(const sparrow_options & opts, bool allow_root)
 {
-    Core *instance = this;
+    Core *core = this;
 
     const char *dbg_proto_env = getenv("SPARROW_DEBUG_PROTOCOL");
     if (dbg_proto_env != nullptr)
     {
-        instance->debug_protocol = (strcmp(dbg_proto_env, "1") == 0 ||
+        core->debug_protocol = (strcmp(dbg_proto_env, "1") == 0 ||
             strcasecmp(dbg_proto_env, "true") == 0);
     }
 
     const char *dbg_damage_env = getenv("SPARROW_DEBUG_DAMAGE");
     if (dbg_damage_env != nullptr)
     {
-        instance->debug_damage = (strcmp(dbg_damage_env, "1") == 0 ||
+        core->debug_damage = (strcmp(dbg_damage_env, "1") == 0 ||
             strcasecmp(dbg_damage_env, "true") == 0);
     }
 
     const char *show_fps_env = getenv("SPARROW_SHOW_FPS");
     if (show_fps_env != nullptr)
     {
-        instance->show_fps = (strcmp(show_fps_env, "1") == 0 ||
+        core->show_fps = (strcmp(show_fps_env, "1") == 0 ||
             strcasecmp(show_fps_env, "true") == 0);
     }
 
     const char *dbg_pacing_env = getenv("SPARROW_DEBUG_PACING");
     if (dbg_pacing_env != nullptr)
     {
-        instance->debug_pacing = (strcmp(dbg_pacing_env, "1") == 0 ||
+        core->debug_pacing = (strcmp(dbg_pacing_env, "1") == 0 ||
             strcasecmp(dbg_pacing_env, "true") == 0);
     }
 
@@ -505,69 +524,96 @@ int Core::init(sparrow_options opts, bool allow_root)
     {
         if ((strcasecmp(buffering_env, "double") == 0) || (strcmp(buffering_env, "0") == 0))
         {
-            instance->buffering_mode = Core::BUFFERING_DOUBLE;
+            core->buffering_mode = Core::BUFFERING_DOUBLE;
         } else if ((strcasecmp(buffering_env, "triple") == 0) || (strcmp(buffering_env,
             "2") == 0) || (strcasecmp(buffering_env, "on") == 0))
         {
-            instance->buffering_mode = Core::BUFFERING_TRIPLE;
+            core->buffering_mode = Core::BUFFERING_TRIPLE;
         } else if ((strcasecmp(buffering_env, "auto") == 0) || (strcmp(buffering_env,
             "1") == 0) || (strcasecmp(buffering_env, "dynamic") == 0))
         {
-            instance->buffering_mode = Core::BUFFERING_AUTO;
+            core->buffering_mode = Core::BUFFERING_AUTO;
         }
     }
 
     enum wlr_log_importance log_level = WLR_INFO;
-    if (getenv("SPARROW_DEBUG") || instance->debug_protocol)
+    if (getenv("SPARROW_DEBUG") || core->debug_protocol)
     {
         log_level = WLR_DEBUG;
     }
 
     wlr_log_init(log_level, nullptr);
-    instance->main_thread_id = pthread_self();
+    core->main_thread_id = pthread_self();
 
     wlr_log(WLR_INFO, "Starting sparrow: %s", get_version_string().c_str());
-    const char *buf_mode_name = (instance->buffering_mode ==
+    const char *buf_mode_name = (core->buffering_mode ==
         Core::BUFFERING_DOUBLE) ? "DOUBLE BUFFERING (DB)" :
-        (instance->buffering_mode == Core::BUFFERING_AUTO) ? "DYNAMIC TRIPLE BUFFERING (AUTO)" :
+        (core->buffering_mode == Core::BUFFERING_AUTO) ? "DYNAMIC TRIPLE BUFFERING (AUTO)" :
         "FORCED TRIPLE BUFFERING (TB:ON)";
     wlr_log(WLR_INFO, "Buffering mode: %s", buf_mode_name);
-    if (instance->debug_damage)
+    if (core->debug_damage)
     {
         wlr_log(WLR_INFO, "Damage visualization debug mode: ENABLED");
     }
 
-    if (instance->show_fps)
+    if (core->show_fps)
     {
         wlr_log(WLR_INFO, "FPS OSD monitor mode: ENABLED");
     }
 
-    if (instance->debug_protocol)
+    if (core->debug_protocol)
     {
         wlr_log(WLR_INFO, "Wayland protocol trace logging: ENABLED");
     }
 
-    instance->embedder_api.struct_size = sizeof(FlutterEngineProcTable);
-    if (FlutterEngineGetProcAddresses(&instance->embedder_api) != kSuccess)
+#if defined (SPARROW_ENABLE_TRACE)
+    const char *perfetto_path = nullptr;
+    int rdoc_frame = -1;
+    for (int i = 1; i < opts.argc; ++i)
+    {
+        if ((strcmp(opts.argv[i], "--trace-perfetto") == 0) ||
+            (strcmp(opts.argv[i], "--perfetto") == 0))
+        {
+            perfetto_path = "out/sparrow.pftrace";
+        } else if (strncmp(opts.argv[i], "--trace-perfetto=", 17) == 0)
+        {
+            perfetto_path = opts.argv[i] + 17;
+        } else if (strncmp(opts.argv[i], "--perfetto=", 11) == 0)
+        {
+            perfetto_path = opts.argv[i] + 11;
+        } else if (strcmp(opts.argv[i], "--renderdoc-capture") == 0)
+        {
+            rdoc_frame = 30;
+        } else if (strncmp(opts.argv[i], "--renderdoc-capture=", 20) == 0)
+        {
+            rdoc_frame = atoi(opts.argv[i] + 20);
+        }
+    }
+
+    SparrowTrace::instance().init(perfetto_path, rdoc_frame);
+#endif
+
+    core->embedder_api.struct_size = sizeof(FlutterEngineProcTable);
+    if (FlutterEngineGetProcAddresses(&core->embedder_api) != kSuccess)
     {
         wlr_log(WLR_ERROR, "Could not get engine proc table");
-        delete (instance);
+        delete (core);
         return EXIT_FAILURE;
     }
 
-    instance->wl_display = wl_display_create();
-    wlr_fixes_create(instance->wl_display, 1);
-    instance->wl_event_loop = wl_display_get_event_loop(instance->wl_display);
+    core->wl_display = wl_display_create();
+    wlr_fixes_create(core->wl_display, 1);
+    core->wl_event_loop = wl_display_get_event_loop(core->wl_display);
 
-    wl_display_set_default_max_buffer_size(instance->wl_display, 1024 * 1024);
+    wl_display_set_default_max_buffer_size(core->wl_display, 1024UL * 1024UL);
 
-    instance->backend =
-        wlr_backend_autocreate(instance->wl_event_loop, &instance->session);
-    if (instance->backend == nullptr)
+    core->backend =
+        wlr_backend_autocreate(core->wl_event_loop, &core->session);
+    if (core->backend == nullptr)
     {
         wlr_log(WLR_ERROR, "Failed to create wlr_backend");
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
@@ -578,12 +624,12 @@ int Core::init(sparrow_options opts, bool allow_root)
         return (int)instance->callable_queue.execute();
     };
 
-    instance->callable_queue_event_source = wl_event_loop_add_fd(instance->wl_event_loop,
-        instance->callable_queue.get_fd(), WL_EVENT_READABLE,
-        callable_queue_function, instance);
+    core->callable_queue_event_source = wl_event_loop_add_fd(core->wl_event_loop,
+        core->callable_queue.get_fd(), WL_EVENT_READABLE,
+        callable_queue_function, core);
 
-    instance->fps_decay_timer = wl_event_loop_add_timer(
-        instance->wl_event_loop,
+    core->fps_decay_timer = wl_event_loop_add_timer(
+        core->wl_event_loop,
         [] (void *data) -> int
     {
         Core *inst = static_cast<Core*>(data);
@@ -594,7 +640,7 @@ int Core::init(sparrow_options opts, bool allow_root)
 
         return 0;
     },
-        instance);
+        core);
 
     int drm_fd = -1;
     char *drm_device = getenv("WLR_RENDER_DRM_DEVICE");
@@ -603,7 +649,7 @@ int Core::init(sparrow_options opts, bool allow_root)
         drm_fd = open(drm_device, O_RDWR | O_CLOEXEC);
     } else
     {
-        drm_fd = wlr_backend_get_drm_fd(instance->backend);
+        drm_fd = wlr_backend_get_drm_fd(core->backend);
     }
 
     if (drm_fd < 0)
@@ -633,94 +679,94 @@ int Core::init(sparrow_options opts, bool allow_root)
     if (egl == nullptr)
     {
         wlr_log(WLR_ERROR, "Failed to create EGL");
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
-    instance->egl = egl;
+    core->egl = egl;
 
     wlr_renderer *renderer = wlr_gles2_renderer_create(egl);
     if (renderer == nullptr)
     {
         wlr_log(WLR_ERROR, "Failed to create GLES2 renderer");
         wlr_egl_destroy(egl);
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
-    instance->renderer = renderer;
+    core->renderer = renderer;
 
     // wlr_egl is opaque in 0.18 - extract EGL display/context via accessors
-    instance->egl_display = wlr_egl_get_display(egl);
-    instance->egl_context = wlr_egl_get_context(egl);
+    core->egl_display = wlr_egl_get_display(egl);
+    core->egl_context = wlr_egl_get_context(egl);
 
-    if ((wlr_renderer_get_drm_fd(instance->renderer) >= 0) &&
-        instance->renderer->features.timeline)
+    if ((wlr_renderer_get_drm_fd(core->renderer) >= 0) &&
+        core->renderer->features.timeline)
     {
         wlr_linux_drm_syncobj_manager_v1_create(
-            instance->wl_display, 1, wlr_renderer_get_drm_fd(instance->renderer));
+            core->wl_display, 1, wlr_renderer_get_drm_fd(core->renderer));
     }
 
-    instance->allocator =
-        wlr_allocator_autocreate(instance->backend, instance->renderer);
-    if (instance->allocator == nullptr)
+    core->allocator =
+        wlr_allocator_autocreate(core->backend, core->renderer);
+    if (core->allocator == nullptr)
     {
         wlr_log(WLR_ERROR,
             "Failed to create allocator: neither DRM render node (/dev/dri) nor /dev/udmabuf is available");
         wlr_egl_destroy(egl);
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
     if (!allow_root && !drop_permissions())
     {
         wlr_egl_destroy(egl);
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
-    wlr_renderer_init_wl_display(instance->renderer, instance->wl_display);
+    wlr_renderer_init_wl_display(core->renderer, core->wl_display);
 
-    wlr_compositor_create(instance->wl_display, 6, instance->renderer);
+    wlr_compositor_create(core->wl_display, 6, core->renderer);
     wlr_subcompositor_create(
-        instance->wl_display); // Required by Firefox and other browsers
+        core->wl_display); // Required by Firefox and other browsers
 
-    wlr_data_device_manager_create(instance->wl_display);
+    wlr_data_device_manager_create(core->wl_display);
 
     // Primary selection (middle-click paste) - essential for Linux workflow
-    wlr_primary_selection_v1_device_manager_create(instance->wl_display);
+    wlr_primary_selection_v1_device_manager_create(core->wl_display);
 
     // Data control - clipboard access for wl-copy/wl-paste and some terminal
     // emulators (legacy wlr protocol and modern standard ext protocol)
-    wlr_data_control_manager_v1_create(instance->wl_display);
-    wlr_ext_data_control_manager_v1_create(instance->wl_display, 1);
+    wlr_data_control_manager_v1_create(core->wl_display);
+    wlr_ext_data_control_manager_v1_create(core->wl_display, 1);
 
-    instance->output_layout = wlr_output_layout_create(instance->wl_display);
-    instance->scene = wlr_scene_create();
-    instance->scene_output_layout =
-        wlr_scene_attach_output_layout(instance->scene, instance->output_layout);
-    instance->flutter_scene_buffer = nullptr;
+    core->output_layout = wlr_output_layout_create(core->wl_display);
+    core->scene = wlr_scene_create();
+    core->scene_output_layout =
+        wlr_scene_attach_output_layout(core->scene, core->output_layout);
+    core->flutter_scene_buffer = nullptr;
 
     // Initialize multi-output support
-    wl_list_init(&instance->outputs);
-    instance->vsync_output     = nullptr;
-    instance->next_output_id   = 0;
-    instance->vsync_rate_limit = 0;
+    wl_list_init(&core->outputs);
+    core->vsync_output     = nullptr;
+    core->next_output_id   = 0;
+    core->vsync_rate_limit = 0;
 
     wlr_color_representation_manager_v1_create_with_renderer(
-        instance->wl_display, 1, instance->renderer);
+        core->wl_display, 1, core->renderer);
 
     wlr_log(WLR_INFO, "instance->renderer->features.input_color_transform %i",
-        instance->renderer->features.input_color_transform);
-    if (instance->renderer->features.input_color_transform)
+        core->renderer->features.input_color_transform);
+    if (core->renderer->features.input_color_transform)
     {
         static const enum wp_color_manager_v1_render_intent render_intents[] = {
             WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL,
@@ -729,11 +775,11 @@ int Core::init(sparrow_options opts, bool allow_root)
         size_t transfer_functions_len = 0;
         enum wp_color_manager_v1_transfer_function *transfer_functions =
             wlr_color_manager_v1_transfer_function_list_from_renderer(
-                instance->renderer, &transfer_functions_len);
+                core->renderer, &transfer_functions_len);
 
         size_t primaries_len = 0;
         enum wp_color_manager_v1_primaries *primaries =
-            wlr_color_manager_v1_primaries_list_from_renderer(instance->renderer,
+            wlr_color_manager_v1_primaries_list_from_renderer(core->renderer,
                                                               &primaries_len);
 
         wlr_color_manager_v1_options cm_options{};
@@ -748,7 +794,7 @@ int Core::init(sparrow_options opts, bool allow_root)
         cm_options.primaries_len = primaries_len;
 
         auto color_manager_v1 =
-            wlr_color_manager_v1_create(instance->wl_display, 2, &cm_options);
+            wlr_color_manager_v1_create(core->wl_display, 2, &cm_options);
         if (!color_manager_v1)
         {
             wlr_log(WLR_ERROR, "Failed to create wlr_color_manager_v1 global");
@@ -762,179 +808,185 @@ int Core::init(sparrow_options opts, bool allow_root)
                           "wp_color_management_v1 will not be available.");
     }
 
-    instance->new_output.notify = sparrow_server_new_output;
-    wl_signal_add(&instance->backend->events.new_output, &instance->new_output);
+    core->new_output.notify = sparrow_server_new_output;
+    wl_signal_add(&core->backend->events.new_output, &core->new_output);
 
     // XDG output manager - provides output info to clients (needed by grim, etc.)
-    wlr_xdg_output_manager_v1_create(instance->wl_display,
-        instance->output_layout);
+    wlr_xdg_output_manager_v1_create(core->wl_display,
+        core->output_layout);
 
     // Output manager protocol - dynamic output configuration (wlr-randr,
     // wdisplays, kanshi)
     sparrow_output_manager_init();
     sparrow_output_power_manager_init();
 
-    instance->xdg_shell = wlr_xdg_shell_create(instance->wl_display, 5);
-    instance->new_xdg_toplevel.notify = sparrow_new_xdg_toplevel;
-    wl_signal_add(&instance->xdg_shell->events.new_toplevel,
-        &instance->new_xdg_toplevel);
+    core->xdg_shell = wlr_xdg_shell_create(core->wl_display, 5);
+    core->new_xdg_toplevel.notify = sparrow_new_xdg_toplevel;
+    wl_signal_add(&core->xdg_shell->events.new_toplevel,
+        &core->new_xdg_toplevel);
 
-    wlr_tablet_v2_create(instance->wl_display);
+    wlr_tablet_v2_create(core->wl_display);
 
     // Screencopy - enables screenshots (grim) and screen recording
-    wlr_screencopy_manager_v1_create(instance->wl_display);
+    wlr_screencopy_manager_v1_create(core->wl_display);
 
     // Export DMA-BUF - enables screen sharing (OBS, Discord, Zoom)
-    wlr_export_dmabuf_manager_v1_create(instance->wl_display);
+    wlr_export_dmabuf_manager_v1_create(core->wl_display);
 
-    wlr_alpha_modifier_v1_create(instance->wl_display);
+    wlr_alpha_modifier_v1_create(core->wl_display);
 
     // Idle notification - lets apps know when user is idle (for screen lock,
     // power management)
-    instance->idle_notifier = wlr_idle_notifier_v1_create(instance->wl_display);
+    core->idle_notifier = wlr_idle_notifier_v1_create(core->wl_display);
 
     // Idle inhibit - allows apps to prevent idle (video playback, presentations)
-    wlr_idle_inhibit_v1_create(instance->wl_display);
+    wlr_idle_inhibit_v1_create(core->wl_display);
 
     // Legacy KDE server decoration protocol - set default mode to SERVER
     // This tells older clients (GTK3, some Qt, Firefox) that we prefer
     // server-side decorations
-    instance->legacy_decoration_manager =
-        wlr_server_decoration_manager_create(instance->wl_display);
+    core->legacy_decoration_manager =
+        wlr_server_decoration_manager_create(core->wl_display);
     wlr_server_decoration_manager_set_default_mode(
-        instance->legacy_decoration_manager,
+        core->legacy_decoration_manager,
         WLR_SERVER_DECORATION_MANAGER_MODE_SERVER);
-    instance->new_server_decoration.notify = sparrow_handle_new_server_decoration;
-    wl_signal_add(&instance->legacy_decoration_manager->events.new_decoration,
-        &instance->new_server_decoration);
+    core->new_server_decoration.notify = sparrow_handle_new_server_decoration;
+    wl_signal_add(&core->legacy_decoration_manager->events.new_decoration,
+        &core->new_server_decoration);
     wlr_log(WLR_INFO,
         "Enabled KDE server decoration protocol with SERVER mode default");
 
     // xdg-decoration: tell apps to use server-side decorations (we provide title
     // bars)
-    instance->decoration_manager =
-        wlr_xdg_decoration_manager_v1_create(instance->wl_display);
-    instance->new_toplevel_decoration.notify =
+    core->decoration_manager =
+        wlr_xdg_decoration_manager_v1_create(core->wl_display);
+    core->new_toplevel_decoration.notify =
         sparrow_handle_new_toplevel_decoration;
-    wl_signal_add(&instance->decoration_manager->events.new_toplevel_decoration,
-        &instance->new_toplevel_decoration);
+    wl_signal_add(&core->decoration_manager->events.new_toplevel_decoration,
+        &core->new_toplevel_decoration);
 
     // Foreign toplevel protocols for window management and listing
-    instance->foreign_toplevel_manager =
-        wlr_foreign_toplevel_manager_v1_create(instance->wl_display);
-    if (instance->foreign_toplevel_manager != nullptr)
+    core->foreign_toplevel_manager =
+        wlr_foreign_toplevel_manager_v1_create(core->wl_display);
+    if (core->foreign_toplevel_manager != nullptr)
     {
         wlr_log(WLR_INFO, "Enabled foreign toplevel management protocol "
                           "(wlr_foreign_toplevel_management_v1)");
     }
 
-    instance->ext_foreign_toplevel_list =
-        wlr_ext_foreign_toplevel_list_v1_create(instance->wl_display, 1);
-    if (instance->ext_foreign_toplevel_list != nullptr)
+    core->ext_foreign_toplevel_list =
+        wlr_ext_foreign_toplevel_list_v1_create(core->wl_display, 1);
+    if (core->ext_foreign_toplevel_list != nullptr)
     {
         wlr_log(WLR_INFO, "Enabled ext-foreign-toplevel-list protocol "
                           "(ext_foreign_toplevel_list_v1)");
     }
 
-    instance->pointer_gestures =
-        wlr_pointer_gestures_v1_create(instance->wl_display);
-    instance->relative_pointer_manager =
-        wlr_relative_pointer_manager_v1_create(instance->wl_display);
-    instance->pointer_constraints =
-        wlr_pointer_constraints_v1_create(instance->wl_display);
-    sparrow_pointer_constraints_init(instance);
+    core->pointer_gestures =
+        wlr_pointer_gestures_v1_create(core->wl_display);
+    core->relative_pointer_manager =
+        wlr_relative_pointer_manager_v1_create(core->wl_display);
+    core->pointer_constraints =
+        wlr_pointer_constraints_v1_create(core->wl_display);
+    sparrow_pointer_constraints_init(core);
 
-    instance->virtual_keyboard_manager =
-        wlr_virtual_keyboard_manager_v1_create(instance->wl_display);
-    if (instance->virtual_keyboard_manager != nullptr)
+    core->virtual_keyboard_manager =
+        wlr_virtual_keyboard_manager_v1_create(core->wl_display);
+    if (core->virtual_keyboard_manager != nullptr)
     {
-        instance->new_virtual_keyboard.notify = handle_new_virtual_keyboard;
+        core->new_virtual_keyboard.notify = handle_new_virtual_keyboard;
         wl_signal_add(
-            &instance->virtual_keyboard_manager->events.new_virtual_keyboard,
-            &instance->new_virtual_keyboard);
+            &core->virtual_keyboard_manager->events.new_virtual_keyboard,
+            &core->new_virtual_keyboard);
         wlr_log(WLR_INFO,
             "Enabled virtual keyboard protocol (wlr_virtual_keyboard_v1)");
     }
 
-    instance->virtual_pointer_manager =
-        wlr_virtual_pointer_manager_v1_create(instance->wl_display);
-    if (instance->virtual_pointer_manager != nullptr)
+    core->virtual_pointer_manager =
+        wlr_virtual_pointer_manager_v1_create(core->wl_display);
+    if (core->virtual_pointer_manager != nullptr)
     {
-        instance->new_virtual_pointer.notify = handle_new_virtual_pointer;
+        core->new_virtual_pointer.notify = handle_new_virtual_pointer;
         wl_signal_add(
-            &instance->virtual_pointer_manager->events.new_virtual_pointer,
-            &instance->new_virtual_pointer);
+            &core->virtual_pointer_manager->events.new_virtual_pointer,
+            &core->new_virtual_pointer);
         wlr_log(WLR_INFO,
             "Enabled virtual pointer protocol (wlr_virtual_pointer_v1)");
     }
 
-    wlr_input_method_manager_v2_create(instance->wl_display);
-    wlr_text_input_manager_v3_create(instance->wl_display);
+    wlr_input_method_manager_v2_create(core->wl_display);
+    wlr_text_input_manager_v3_create(core->wl_display);
 
-    instance->presentation =
-        wlr_presentation_create(instance->wl_display, instance->backend, 1);
-    wlr_viewporter_create(instance->wl_display);
+    core->presentation =
+        wlr_presentation_create(core->wl_display, core->backend, 1);
+    wlr_viewporter_create(core->wl_display);
 
     wlr_xdg_foreign_registry *foreign_registry =
-        wlr_xdg_foreign_registry_create(instance->wl_display);
-    wlr_xdg_foreign_v1_create(instance->wl_display, foreign_registry);
-    wlr_xdg_foreign_v2_create(instance->wl_display, foreign_registry);
+        wlr_xdg_foreign_registry_create(core->wl_display);
+    wlr_xdg_foreign_v1_create(core->wl_display, foreign_registry);
+    wlr_xdg_foreign_v2_create(core->wl_display, foreign_registry);
 
-    wlr_fractional_scale_manager_v1_create(instance->wl_display, 1);
-    wlr_single_pixel_buffer_manager_v1_create(instance->wl_display);
-    wlr_content_type_manager_v1_create(instance->wl_display, 1);
+    wlr_fractional_scale_manager_v1_create(core->wl_display, 1);
+    wlr_single_pixel_buffer_manager_v1_create(core->wl_display);
+    wlr_content_type_manager_v1_create(core->wl_display, 1);
 
     // xdg-activation-v1: allows applications to transfer focus / activate
     // surfaces
-    instance->xdg_activation = wlr_xdg_activation_v1_create(instance->wl_display);
-    if (instance->xdg_activation != nullptr)
+    core->xdg_activation = wlr_xdg_activation_v1_create(core->wl_display);
+    if (core->xdg_activation != nullptr)
     {
-        instance->xdg_activation_request_activate.notify =
+        core->xdg_activation_request_activate.notify =
             sparrow_handle_xdg_activation_request_activate;
-        wl_signal_add(&instance->xdg_activation->events.request_activate,
-            &instance->xdg_activation_request_activate);
+        wl_signal_add(&core->xdg_activation->events.request_activate,
+            &core->xdg_activation_request_activate);
         wlr_log(WLR_INFO, "Enabled xdg-activation-v1 protocol");
+    }
+
+    core->ipc_server = new IpcServer(core);
+    if (!core->ipc_server->init())
+    {
+        wlr_log(WLR_ERROR, "Failed to initialize Sparrow IPC server");
     }
 
     increase_nofile_limit();
 
     // Handle popup surfaces (menus, dropdowns, tooltips)
-    instance->new_xdg_popup.notify = sparrow_new_xdg_popup;
-    wl_signal_add(&instance->xdg_shell->events.new_popup,
-        &instance->new_xdg_popup);
+    core->new_xdg_popup.notify = sparrow_new_xdg_popup;
+    wl_signal_add(&core->xdg_shell->events.new_popup,
+        &core->new_xdg_popup);
 
-    auto socket = choose_socket(instance->wl_display);
+    auto socket = choose_socket(core->wl_display);
     if (!socket)
     {
         wlr_log(WLR_ERROR, "Failed to create Wayland socket");
         wlr_egl_destroy(egl);
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
     sparrow_seat_init();
 
-    instance->wl_socket = socket.value().c_str();
-    if (!wlr_backend_start(instance->backend))
+    core->wl_socket = socket.value().c_str();
+    if (!wlr_backend_start(core->backend))
     {
         wlr_log(WLR_ERROR, "Failed to initialize backend, exiting");
         wlr_egl_destroy(egl);
-        wl_display_destroy_clients(instance->wl_display);
-        wl_display_destroy(instance->wl_display);
-        delete (instance);
+        wl_display_destroy_clients(core->wl_display);
+        wl_display_destroy(core->wl_display);
+        delete (core);
         return EXIT_FAILURE;
     }
 
-    setenv("WAYLAND_DISPLAY", instance->wl_socket, 1);
+    setenv("WAYLAND_DISPLAY", core->wl_socket, 1);
     setenv("XDG_SESSION_TYPE", "wayland", true);
     setenv("DISPLAY", ":0", true);
 
     // instance->views = handle_map_new();
-    instance->subsurfaces = handle_map_new();
-    instance->popups = handle_map_new();
-    wl_list_init(&instance->views_list);
+    core->subsurfaces = handle_map_new();
+    core->popups = handle_map_new();
+    wl_list_init(&core->views_list);
 
     sparrow_renderer_init(eglGetProcAddress);
 
@@ -944,14 +996,14 @@ int Core::init(sparrow_options opts, bool allow_root)
 
     sparrow_enable_realtime_scheduling();
 
-    sparrow_dispatcher_init(instance->wl_display);
+    sparrow_dispatcher_init(core->wl_display);
 
     struct wl_event_loop *event_loop =
-        wl_display_get_event_loop(instance->wl_display);
-    instance->sigint_event_source = wl_event_loop_add_signal(event_loop, SIGINT, handle_term_signal,
-        instance);
-    instance->sigterm_event_source = wl_event_loop_add_signal(event_loop, SIGTERM, handle_term_signal,
-        instance);
+        wl_display_get_event_loop(core->wl_display);
+    core->sigint_event_source = wl_event_loop_add_signal(event_loop, SIGINT, handle_term_signal,
+        core);
+    core->sigterm_event_source = wl_event_loop_add_signal(event_loop, SIGTERM, handle_term_signal,
+        core);
 
     FlutterRendererConfig renderer_config = {};
     renderer_config.type = kOpenGL;
@@ -975,7 +1027,7 @@ int Core::init(sparrow_options opts, bool allow_root)
     project_args.icu_data_path = opts.icu_data_path.c_str();
     project_args.platform_message_callback = engine_cb_platform_message;
     project_args.log_message_callback = engine_cb_log_message;
-    project_args.custom_task_runners  = &instance->custom_task_runners;
+    project_args.custom_task_runners  = &core->custom_task_runners;
     if (opts.argc > 1)
     {
         project_args.dart_entrypoint_argc = opts.argc - 1;
@@ -983,13 +1035,13 @@ int Core::init(sparrow_options opts, bool allow_root)
     }
 
 #ifdef FLUTTER_COMPOSITOR
-    project_args.compositor = &instance->fl_compositor;
+    project_args.compositor = &core->fl_compositor;
 #endif
     project_args.vsync_callback = sparrow_engine_vsync_callback;
     project_args.shutdown_dart_vm_when_done = true;
-    project_args.engine_id = reinterpret_cast<int64_t>(instance);
+    project_args.engine_id = reinterpret_cast<int64_t>(core);
 
-    if (instance->embedder_api.RunsAOTCompiledDartCode())
+    if (core->embedder_api.RunsAOTCompiledDartCode())
     {
         FlutterEngineAOTDataSource aot_source = {};
         FlutterEngineAOTData aot_data;
@@ -1006,9 +1058,9 @@ int Core::init(sparrow_options opts, bool allow_root)
             wlr_log(WLR_ERROR,
                 "Could not load AOT data. FlutterEngineCreateAOTData failed.");
             wlr_egl_destroy(egl);
-            wl_display_destroy_clients(instance->wl_display);
-            wl_display_destroy(instance->wl_display);
-            delete (instance);
+            wl_display_destroy_clients(core->wl_display);
+            wl_display_destroy(core->wl_display);
+            delete (core);
             return EXIT_FAILURE;
         }
 
@@ -1016,18 +1068,19 @@ int Core::init(sparrow_options opts, bool allow_root)
     }
 
     // Initialize the flutter:: client wrapper messaging infrastructure
-    instance->message_dispatcher =
-        std::make_unique<IncomingMessageDispatcher>(&instance->messenger);
-    instance->messenger.SetMessageDispatcher(instance->message_dispatcher.get());
+    core->message_dispatcher =
+        std::make_unique<IncomingMessageDispatcher>(&core->messenger);
+    core->messenger.SetMessageDispatcher(core->message_dispatcher.get());
 
     sparrow_text_input_init();
     sparrow_cursor_init();
+    sparrow_keyboard_channel_init();
     sparrow_isolate_channel_init();
     sparrow_engine_init_channels();
 
-    const FlutterEngineResult fl_result = instance->embedder_api.Run(
-        FLUTTER_ENGINE_VERSION, &renderer_config, &project_args, (void*)instance,
-        &instance->engine);
+    const FlutterEngineResult fl_result = core->embedder_api.Run(
+        FLUTTER_ENGINE_VERSION, &renderer_config, &project_args, (void*)core,
+        &core->engine);
 
     if (fl_result != kSuccess)
     {
@@ -1035,16 +1088,16 @@ int Core::init(sparrow_options opts, bool allow_root)
     }
 
     // Connect the BinaryMessenger to the running engine (must be after Run)
-    instance->messenger.SetEngine(instance->engine, &instance->embedder_api);
+    core->messenger.SetEngine(core->engine, &core->embedder_api);
 
     // Note: Outputs are sent to Flutter when Dart signals "compositor_ready"
     // This ensures Dart's message handlers are registered before we send data
 
     // Send initial window metrics based on total output bounds
-    if (!wl_list_empty(&instance->outputs))
+    if (!wl_list_empty(&core->outputs))
     {
         struct wlr_box total_box = {};
-        wlr_output_layout_get_box(instance->output_layout, nullptr, &total_box);
+        wlr_output_layout_get_box(core->output_layout, nullptr, &total_box);
 
         FlutterWindowMetricsEvent window_metrics = {};
         window_metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
@@ -1055,14 +1108,14 @@ int Core::init(sparrow_options opts, bool allow_root)
         window_metrics.pixel_ratio = 1.0;
         wlr_log(WLR_INFO, "Sending Flutter window metrics: %dx%d, pixel_ratio=%.2f",
             total_box.width, total_box.height, window_metrics.pixel_ratio);
-        instance->embedder_api.SendWindowMetricsEvent(instance->engine,
+        core->embedder_api.SendWindowMetricsEvent(core->engine,
             &window_metrics);
     }
 
     FlutterPointerEvent pointer_event = {};
     pointer_event.struct_size = sizeof(FlutterPointerEvent);
     pointer_event.phase     = kAdd;
-    pointer_event.timestamp = instance->embedder_api.GetCurrentTime() / 1000;
+    pointer_event.timestamp = core->embedder_api.GetCurrentTime() / 1000;
     pointer_event.x = 0;
     pointer_event.y = 0;
     pointer_event.device = 0;
@@ -1071,14 +1124,14 @@ int Core::init(sparrow_options opts, bool allow_root)
     pointer_event.scroll_delta_y = 0;
     pointer_event.device_kind    = kFlutterPointerDeviceKindMouse;
     pointer_event.buttons = 0;
-    instance->embedder_api.SendPointerEvent(instance->engine, &pointer_event, 1);
+    core->embedder_api.SendPointerEvent(core->engine, &pointer_event, 1);
 
     wlr_log(WLR_INFO, "Engine Run success!");
 
     wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",
-        instance->wl_socket);
+        core->wl_socket);
 
-    wl_display_run(instance->wl_display);
+    wl_display_run(core->wl_display);
     if (exit_because_signal == SIGINT)
     {
         wlr_log(WLR_INFO, "Got SIGINT, shutting down");
@@ -1087,78 +1140,81 @@ int Core::init(sparrow_options opts, bool allow_root)
         wlr_log(WLR_INFO, "Got SIGTERM, shutting down");
     }
 
-    wl_display_destroy_clients(instance->wl_display);
-    engine_dispose(instance->engine, project_args.aot_data);
+    sparrow_engine_reset_channels();
 
-    if (instance->new_xdg_toplevel.link.prev != nullptr)
+    wl_display_destroy_clients(core->wl_display);
+    engine_dispose(core->engine, project_args.aot_data);
+
+    if (core->new_xdg_toplevel.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_xdg_toplevel.link);
+        wl_list_remove(&core->new_xdg_toplevel.link);
     }
 
-    if (instance->new_xdg_popup.link.prev != nullptr)
+    if (core->new_xdg_popup.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_xdg_popup.link);
+        wl_list_remove(&core->new_xdg_popup.link);
     }
 
-    if (instance->new_toplevel_decoration.link.prev != nullptr)
+    if (core->new_toplevel_decoration.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_toplevel_decoration.link);
+        wl_list_remove(&core->new_toplevel_decoration.link);
     }
 
-    if (instance->new_server_decoration.link.prev != nullptr)
+    if (core->new_server_decoration.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_server_decoration.link);
+        wl_list_remove(&core->new_server_decoration.link);
     }
 
-    if (instance->new_virtual_keyboard.link.prev != nullptr)
+    if (core->new_virtual_keyboard.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_virtual_keyboard.link);
+        wl_list_remove(&core->new_virtual_keyboard.link);
     }
 
-    if (instance->new_virtual_pointer.link.prev != nullptr)
+    if (core->new_virtual_pointer.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_virtual_pointer.link);
+        wl_list_remove(&core->new_virtual_pointer.link);
     }
 
-    if (instance->new_output.link.prev != nullptr)
+    if (core->new_output.link.prev != nullptr)
     {
-        wl_list_remove(&instance->new_output.link);
-        wl_list_init(&instance->new_output.link);
+        wl_list_remove(&core->new_output.link);
+        wl_list_init(&core->new_output.link);
     }
 
-    if ((instance->output_manager_apply.link.prev != nullptr) &&
-        (instance->output_manager_apply.link.next != &instance->output_manager_apply.link))
+    if ((core->output_manager_apply.link.prev != nullptr) &&
+        (core->output_manager_apply.link.next != &core->output_manager_apply.link))
     {
-        wl_list_remove(&instance->output_manager_apply.link);
-        wl_list_init(&instance->output_manager_apply.link);
+        wl_list_remove(&core->output_manager_apply.link);
+        wl_list_init(&core->output_manager_apply.link);
     }
 
-    if ((instance->output_manager_test.link.prev != nullptr) &&
-        (instance->output_manager_test.link.next != &instance->output_manager_test.link))
+    if ((core->output_manager_test.link.prev != nullptr) &&
+        (core->output_manager_test.link.next != &core->output_manager_test.link))
     {
-        wl_list_remove(&instance->output_manager_test.link);
-        wl_list_init(&instance->output_manager_test.link);
+        wl_list_remove(&core->output_manager_test.link);
+        wl_list_init(&core->output_manager_test.link);
     }
 
-    if ((instance->output_power_manager_set_mode.link.prev != nullptr) &&
-        (instance->output_power_manager_set_mode.link.next != &instance->output_power_manager_set_mode.link))
+    if ((core->output_power_manager_set_mode.link.prev != nullptr) &&
+        (core->output_power_manager_set_mode.link.next != &core->output_power_manager_set_mode.link))
     {
-        wl_list_remove(&instance->output_power_manager_set_mode.link);
-        wl_list_init(&instance->output_power_manager_set_mode.link);
+        wl_list_remove(&core->output_power_manager_set_mode.link);
+        wl_list_init(&core->output_power_manager_set_mode.link);
     }
 
-    if ((instance->xdg_activation_request_activate.link.prev != nullptr) &&
-        (instance->xdg_activation_request_activate.link.next !=
-         &instance->xdg_activation_request_activate.link))
+    if ((core->xdg_activation_request_activate.link.prev != nullptr) &&
+        (core->xdg_activation_request_activate.link.next !=
+         &core->xdg_activation_request_activate.link))
     {
-        wl_list_remove(&instance->xdg_activation_request_activate.link);
-        wl_list_init(&instance->xdg_activation_request_activate.link);
+        wl_list_remove(&core->xdg_activation_request_activate.link);
+        wl_list_init(&core->xdg_activation_request_activate.link);
     }
 
-    if (instance->engine != nullptr)
+    if (core->engine != nullptr)
     {
-        instance->embedder_api.Shutdown(instance->engine);
-        instance->engine = nullptr;
+        core->embedder_api.Shutdown(core->engine);
+        core->engine = nullptr;
+        core->messenger.Shutdown();
     }
 
     sparrow_seat_finish();
@@ -1167,7 +1223,7 @@ int Core::init(sparrow_options opts, bool allow_root)
     sparrow_dispatcher_finish();
 
     Output *out, *out_tmp;
-    wl_list_for_each_safe(out, out_tmp, &instance->outputs, link)
+    wl_list_for_each_safe(out, out_tmp, &core->outputs, link)
     {
         if ((out->destroy.link.prev != nullptr) && (out->destroy.link.next != nullptr))
         {
@@ -1199,9 +1255,9 @@ int Core::init(sparrow_options opts, bool allow_root)
             out->scene_output = nullptr;
         }
 
-        if ((instance->output_layout != nullptr) && (out->wlr_output != nullptr))
+        if ((core->output_layout != nullptr) && (out->wlr_output != nullptr))
         {
-            wlr_output_layout_remove(instance->output_layout, out->wlr_output);
+            wlr_output_layout_remove(core->output_layout, out->wlr_output);
         }
 
         wl_list_remove(&out->link);
@@ -1226,58 +1282,58 @@ int Core::init(sparrow_options opts, bool allow_root)
         delete out;
     }
 
-    if (instance->scene != nullptr)
+    if (core->scene != nullptr)
     {
-        wlr_scene_node_destroy(&instance->scene->tree.node);
-        instance->scene = nullptr;
+        wlr_scene_node_destroy(&core->scene->tree.node);
+        core->scene = nullptr;
     }
 
-    if (instance->output_layout != nullptr)
+    if (core->output_layout != nullptr)
     {
-        wlr_output_layout_destroy(instance->output_layout);
-        instance->output_layout = nullptr;
+        wlr_output_layout_destroy(core->output_layout);
+        core->output_layout = nullptr;
     }
 
-    if (instance->allocator != nullptr)
+    if (core->allocator != nullptr)
     {
-        wlr_allocator_destroy(instance->allocator);
-        instance->allocator = nullptr;
+        wlr_allocator_destroy(core->allocator);
+        core->allocator = nullptr;
     }
 
-    if (instance->renderer != nullptr)
+    if (core->renderer != nullptr)
     {
-        wlr_renderer_destroy(instance->renderer);
-        instance->renderer = nullptr;
+        wlr_renderer_destroy(core->renderer);
+        core->renderer = nullptr;
     }
 
     sparrow_tasks_finish();
 
-    if (instance->callable_queue_event_source != nullptr)
+    if (core->callable_queue_event_source != nullptr)
     {
-        wl_event_source_remove(instance->callable_queue_event_source);
-        instance->callable_queue_event_source = nullptr;
+        wl_event_source_remove(core->callable_queue_event_source);
+        core->callable_queue_event_source = nullptr;
     }
 
-    if (instance->sigint_event_source != nullptr)
+    if (core->sigint_event_source != nullptr)
     {
-        wl_event_source_remove(instance->sigint_event_source);
-        instance->sigint_event_source = nullptr;
+        wl_event_source_remove(core->sigint_event_source);
+        core->sigint_event_source = nullptr;
     }
 
-    if (instance->sigterm_event_source != nullptr)
+    if (core->sigterm_event_source != nullptr)
     {
-        wl_event_source_remove(instance->sigterm_event_source);
-        instance->sigterm_event_source = nullptr;
+        wl_event_source_remove(core->sigterm_event_source);
+        core->sigterm_event_source = nullptr;
     }
 
-    if (instance->fps_decay_timer != nullptr)
+    if (core->fps_decay_timer != nullptr)
     {
-        wl_event_source_remove(instance->fps_decay_timer);
-        instance->fps_decay_timer = nullptr;
+        wl_event_source_remove(core->fps_decay_timer);
+        core->fps_decay_timer = nullptr;
     }
 
-    struct wl_display *wl_display = instance->wl_display;
-    delete (instance);
+    struct wl_display *wl_display = core->wl_display;
+    delete (core);
     wl_display_destroy(wl_display);
     wlr_log(WLR_INFO, "Shutdown successful!");
     return EXIT_SUCCESS;

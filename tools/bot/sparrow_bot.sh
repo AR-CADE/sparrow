@@ -119,7 +119,7 @@ fi
 
 # Find available test clients
 TEST_CLIENT=""
-for candidate in foot weston-terminal kitty alacritty xterm gedit; do
+for candidate in alacritty foot kitty weston-terminal xterm; do
     if command -v "$candidate" &> /dev/null; then
         TEST_CLIENT="$candidate"
         break

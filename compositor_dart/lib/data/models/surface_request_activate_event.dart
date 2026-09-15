@@ -7,15 +7,11 @@ part 'surface_request_activate_event.g.dart';
 
 @JsonSerializable()
 class SurfaceRequestActivateEvent extends Equatable {
-  const SurfaceRequestActivateEvent({
-    required this.handle,
-    String? token,
-    String? appId,
-    this.surface,
-  }) : token = token ?? '',
-       appId = appId ?? '';
+  const new({required this.handle, String? token, String? appId, this.surface})
+    : token = token ?? '',
+      appId = appId ?? '';
 
-  factory SurfaceRequestActivateEvent.fromJson(Map<String, dynamic> json) =>
+  factory fromJson(Map<String, dynamic> json) =>
       _$SurfaceRequestActivateEventFromJson(json);
 
   final int handle;

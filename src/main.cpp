@@ -12,6 +12,7 @@
 #include "sparrow/options.hpp"
 
 #include <execinfo.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 
 #if defined (__has_feature)
@@ -21,6 +22,9 @@
     #if __has_feature(thread_sanitizer)
         #define HAS_TSAN 1
     #endif
+    #if __has_feature(undefined_behavior_sanitizer)
+        #define HAS_UBSAN 1
+    #endif
 #endif
 #if defined (__SANITIZE_ADDRESS__)
     #define HAS_ASAN 1
@@ -28,31 +32,30 @@
 #if defined (__SANITIZE_THREAD__)
     #define HAS_TSAN 1
 #endif
+#if defined (__SANITIZE_UNDEFINED__)
+    #define HAS_UBSAN 1
+#endif
 
-#if defined (HAS_ASAN)
-extern "C" const char *__lsan_default_suppressions()
+#ifdef HAS_TSAN
+extern "C" const char * __tsan_default_options()
 {
-    return "leak:libgallium\n"
-           "leak:libLLVM\n"
-           "leak:libEGL_mesa\n"
-           "leak:libfontconfig\n"
-           "leak:libflutter_engine\n"
-           "leak:libdrm\n"
-           "leak:libglapi\n"
-           "leak:libxkbcommon\n"
-           "leak:libgbm\n";
+    return "suppressions=tsan_suppressions.txt";
 }
 
 #endif
 
-#if defined (HAS_TSAN)
-extern "C" const char *__tsan_default_suppressions()
+#ifdef HAS_ASAN
+extern "C" const char * __lsan_default_options()
 {
-    return "race:libgallium\n"
-           "race:libEGL_mesa\n"
-           "race:libdrm\n"
-           "race:libfontconfig\n"
-           "race:libflutter_engine\n";
+    return "suppressions=lsan_suppressions.txt";
+}
+
+#endif
+
+#ifdef HAS_UBSAN
+extern "C" const char * __ubsan_default_options()
+{
+    return "suppressions=ubsan_suppressions.txt";
 }
 
 #endif
@@ -93,6 +96,9 @@ static void crash_signal_handler(int sig)
 
       case SIGILL:
         error = "Illegal instruction (SIGILL)";
+        break;
+
+      default:
         break;
     }
 
@@ -147,6 +153,13 @@ std::string get_exec_path()
 
 int main(int argc, const char *argv[])
 {
+#if defined (HAS_ASAN) || defined (HAS_TSAN)
+    prctl(PR_SET_DUMPABLE, 1);
+    #ifdef PR_SET_PTRACER
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    #endif
+#endif
+
     const char *engine_argv[MAX_ENGINE_ARGS];
     int engine_argc = 0;
 
@@ -161,7 +174,7 @@ int main(int argc, const char *argv[])
     const char *switch_count_str = getenv("FLUTTER_ENGINE_SWITCHES");
     if (switch_count_str)
     {
-        int switch_count = atoi(switch_count_str);
+        int switch_count = (int)strtol(switch_count_str, nullptr, 10);
         for (int i = 1; i <= switch_count && engine_argc < MAX_ENGINE_ARGS; i++)
         {
             char env_name[64];
@@ -354,6 +367,26 @@ int main(int argc, const char *argv[])
             setenv("SPARROW_TRACE", "1", 1);
         }
 
+        if ((strcmp(argv[i], "--trace-perfetto") == 0) ||
+            (strcmp(argv[i], "--perfetto") == 0))
+        {
+            setenv("SPARROW_TRACE_PERFETTO", "out/sparrow.pftrace", 1);
+        } else if (strncmp(argv[i], "--trace-perfetto=", 17) == 0)
+        {
+            setenv("SPARROW_TRACE_PERFETTO", argv[i] + 17, 1);
+        } else if (strncmp(argv[i], "--perfetto=", 11) == 0)
+        {
+            setenv("SPARROW_TRACE_PERFETTO", argv[i] + 11, 1);
+        }
+
+        if (strcmp(argv[i], "--renderdoc-capture") == 0)
+        {
+            setenv("RENDERDOC_CAPFILE", "out/sparrow_frame.rdc", 1);
+        } else if (strncmp(argv[i], "--renderdoc-capture=", 20) == 0)
+        {
+            setenv("RENDERDOC_CAPFILE", argv[i] + 20, 1);
+        }
+
         if (strncmp(argv[i], "--buffering=", 12) == 0)
         {
             setenv("SPARROW_BUFFERING", argv[i] + 12, 1);
@@ -408,7 +441,7 @@ int main(int argc, const char *argv[])
 
     std::set_terminate([] ()
     {
-        std::cout << "Unhandled exception" << std::endl;
+        std::cout << "Unhandled exception\n";
         std::abort();
     });
 

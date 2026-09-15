@@ -1,4 +1,5 @@
-#pragma once
+#ifndef UDMABUF_HPP
+#define UDMABUF_HPP
 
 #include <sparrow/nonstd/wlroots-full.hpp>
 
@@ -24,3 +25,5 @@ struct wlr_texture *sparrow_udmabuf_get_or_import_texture(struct wlr_surface *su
  * Get texture for a wlr_surface, prioritizing zero-copy udmabuf hardware textures.
  */
 struct wlr_texture *sparrow_surface_get_texture(struct wlr_surface *surface);
+
+#endif // UDMABUF_HPP

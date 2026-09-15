@@ -6,7 +6,7 @@ part of 'display_mode.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-DisplayMode _$DisplayModeFromJson(Map<String, dynamic> json) => DisplayMode(
+DisplayMode _$DisplayModeFromJson(Map json) => DisplayMode(
   width: (json['width'] as num).toInt(),
   height: (json['height'] as num).toInt(),
   refresh: (json['refresh'] as num).toInt(),

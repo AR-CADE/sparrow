@@ -6,7 +6,7 @@ part of 'popup.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-Popup _$PopupFromJson(Map<String, dynamic> json) => Popup(
+Popup _$PopupFromJson(Map json) => Popup(
   handle: (json['handle'] as num).toInt(),
   textureId: (json['texture_id'] as num).toInt(),
   parentHandle: (json['parent_handle'] as num).toInt(),

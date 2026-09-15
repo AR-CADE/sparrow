@@ -105,6 +105,7 @@ bool sparrow_view_filter_occluded_damage(const SparrowView *view,
     pixman_region32_t *damage,
     pixman_region32_t *visible_damage_out);
 void sparrow_view_focus(SparrowView *view);
+bool sparrow_view_is_visible(const SparrowView *view);
 void sparrow_view_update_scene(SparrowView *view);
 void sparrow_view_create_scene(SparrowView *view);
 void sparrow_view_destroy_scene(SparrowView *view);

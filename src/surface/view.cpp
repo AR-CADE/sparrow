@@ -2,6 +2,7 @@
 #include "core.hpp"
 #include "input/pointer.hpp"
 #include "sub_surface.hpp"
+#include "flutter/platform/text_input.hpp"
 
 void sparrow_view_damage_whole(SparrowView *view)
 {
@@ -293,6 +294,43 @@ void sparrow_view_focus(SparrowView *view)
     const struct wlr_surface *prev_surface = seat->keyboard_state.focused_surface;
     if (prev_surface == surface)
     {
+        if (view->xdg_surface && view->xdg_surface->initialized &&
+            (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) && view->toplevel)
+        {
+            if (!view->activated)
+            {
+                wlr_xdg_toplevel_set_activated(view->toplevel, true);
+                view->activated = true;
+                if (view->foreign_toplevel)
+                {
+                    wlr_foreign_toplevel_handle_v1_set_activated(view->foreign_toplevel,
+                        true);
+                }
+            }
+        }
+
+        double sx, sy;
+        const struct wlr_scene_node *node =
+            wlr_scene_node_at(&instance->scene->tree.node, instance->cursor->x,
+                              instance->cursor->y, &sx, &sy);
+        if (node)
+        {
+            wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+            wlr_seat_pointer_notify_frame(seat);
+        } else
+        {
+            wlr_seat_pointer_notify_enter(seat, surface, 0, 0);
+            wlr_seat_pointer_notify_frame(seat);
+        }
+
+        sparrow_pointer_constraints_set_focus(instance, surface);
+
+        if (view->texture_registered)
+        {
+            instance->embedder_api.MarkExternalTextureFrameAvailable(instance->engine,
+                view->texture_id);
+        }
+
         return;
     }
 
@@ -300,7 +338,8 @@ void sparrow_view_focus(SparrowView *view)
     {
         struct wlr_xdg_surface *previous = wlr_xdg_surface_try_from_wlr_surface(
             seat->keyboard_state.focused_surface);
-        if (previous && (previous->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL))
+        if (previous && previous->initialized && (previous->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+            previous->toplevel)
         {
             wlr_xdg_toplevel_set_activated(previous->toplevel, false);
             SparrowView *prev_view = static_cast<SparrowView*>(previous->data);
@@ -320,8 +359,30 @@ void sparrow_view_focus(SparrowView *view)
         }
     }
 
+    // Ensure all other mapped views are deactivated
+    SparrowView *other_view = nullptr;
+    wl_list_for_each(other_view, &instance->views_list, link)
+    {
+        if ((other_view != view) && other_view->activated)
+        {
+            other_view->activated = false;
+            if (other_view->toplevel)
+            {
+                wlr_xdg_toplevel_set_activated(other_view->toplevel, false);
+            }
+
+            if (other_view->foreign_toplevel)
+            {
+                wlr_foreign_toplevel_handle_v1_set_activated(other_view->foreign_toplevel,
+                    false);
+            }
+        }
+    }
+
     struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
-    if (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL)
+    sparrow_text_input_stop_repeat(0);
+    if (view->xdg_surface && view->xdg_surface->initialized &&
+        (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) && view->toplevel)
     {
         wlr_xdg_toplevel_set_activated(view->toplevel, true);
         view->activated = true;
@@ -371,13 +432,67 @@ void sparrow_view_focus(SparrowView *view)
     SparrowSubSurface *sub = nullptr;
     wl_list_for_each(sub, &view->subsurfaces, link)
     {
-        if (sub && sub->texture_registered)
+        if (sub->texture_registered)
         {
             instance->embedder_api.MarkExternalTextureFrameAvailable(instance->engine,
                 sub->texture_id);
         }
     }
     sparrow_view_damage_whole(view);
+}
+
+bool sparrow_view_is_visible(const SparrowView *view)
+{
+    if (!view || !view->xdg_surface || !view->xdg_surface->surface ||
+        !view->xdg_surface->surface->mapped)
+    {
+        return false;
+    }
+
+    Core *instance = Core::instance();
+    if (!instance)
+    {
+        return false;
+    }
+
+    // 1. Overview mode: all mapped views are visible in the overview grid
+    if (instance->force_render_all_views)
+    {
+        return true;
+    }
+
+    // 2. Active scene box (platform view if present in current scene)
+    struct wlr_box scene_box = {};
+    if (sparrow_view_get_scene_box(view, &scene_box))
+    {
+        return true;
+    }
+
+    // 3. Normal mode: if this view is activated (the current focused page), it is visible
+    if (view->activated)
+    {
+        return true;
+    }
+
+    // 4. Single-view fallback: if there is only 1 mapped view in the compositor,
+    // it is on the only page, so it is visible even if focus is temporarily cleared
+    size_t mapped_view_count     = 0;
+    const SparrowView *only_view = nullptr;
+    const SparrowView *v = nullptr;
+    wl_list_for_each(v, &instance->views_list, link)
+    {
+        if (v->xdg_surface && v->xdg_surface->surface && v->xdg_surface->surface->mapped)
+        {
+            mapped_view_count++;
+            only_view = v;
+        }
+    }
+    if ((mapped_view_count <= 1) && (only_view == view))
+    {
+        return true;
+    }
+
+    return false;
 }
 
 void sparrow_view_update_scene(SparrowView *view)

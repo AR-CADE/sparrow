@@ -3,12 +3,14 @@ import 'package:compositor_dart/data/repositories/compositor/compositor_reposito
     show CompositorRepository;
 import 'package:compositor_dart/presentation/pointer_event_encoder.dart'
     show PointerEventEncoder;
-import 'package:flutter/services.dart' show PlatformViewController;
+import 'package:flutter/gestures.dart' show PointerScrollEvent;
+import 'package:flutter/services.dart'
+    show HardwareKeyboard, PlatformViewController;
 import 'package:material_ui/material_ui.dart' show PointerEvent, Size;
 
 class CompositorPlatformViewController extends PlatformViewController
     with PointerEventEncoder {
-  CompositorPlatformViewController({required this.surface});
+  new({required this.surface});
   final Surface surface;
   Size size = const Size(100, 100);
 
@@ -21,16 +23,17 @@ class CompositorPlatformViewController extends PlatformViewController
     if (!CompositorRepository().platform.interactive) {
       return;
     }
+    if (event is PointerScrollEvent &&
+        HardwareKeyboard.instance.isMetaPressed) {
+      return;
+    }
     final data = encodePointerEvent(
       handle: surface.handle,
       event: event,
       widgetSize: size,
     );
 
-    await CompositorRepository().platform.channel.invokeMethod(
-      'surface_pointer_event',
-      data,
-    );
+    await CompositorRepository().platform.surfacePointerEvent(data);
   }
 
   @override

@@ -7,7 +7,7 @@ part 'display_output.g.dart';
 
 @JsonSerializable()
 class DisplayOutput extends Equatable {
-  const DisplayOutput({
+  const new({
     required this.id,
     String? name,
     String? make,
@@ -34,8 +34,7 @@ class DisplayOutput extends Equatable {
        availableModes = availableModes ?? const [],
        isPrimary = isPrimary ?? false;
 
-  factory DisplayOutput.fromJson(Map<String, dynamic> json) =>
-      _$DisplayOutputFromJson(json);
+  factory fromJson(Map<String, dynamic> json) => _$DisplayOutputFromJson(json);
 
   /// Unique output ID from the compositor.
   final int id;

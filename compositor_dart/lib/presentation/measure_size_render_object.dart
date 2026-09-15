@@ -3,7 +3,7 @@ import 'package:flutter/rendering.dart' show RenderProxyBox;
 import 'package:material_ui/material_ui.dart' show Size, WidgetsBinding;
 
 class MeasureSizeRenderObject extends RenderProxyBox {
-  MeasureSizeRenderObject(this.onChange);
+  new(this.onChange);
   Size? oldSize;
   final OnWidgetSizeChange onChange;
 

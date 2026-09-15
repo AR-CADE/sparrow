@@ -6,7 +6,7 @@
 void send_surface_title(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !view || !view->toplevel)
+    if (!instance || !instance->pigeon_flutter_api || !view || !view->toplevel)
     {
         return;
     }
@@ -14,20 +14,21 @@ void send_surface_title(SparrowView *view)
     const char *title  = view->toplevel->title;
     const char *app_id = view->toplevel->app_id;
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)view->handle)},
-        {flutter::EncodableValue("title"), flutter::EncodableValue(title ? title : "")},
-        {flutter::EncodableValue("app_id"), flutter::EncodableValue(app_id ? app_id : "")},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_title",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceTitle(
+        view->handle,
+        title ? title : "",
+        app_id ? app_id : "",
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_title error: %s", err.message().c_str());
+    });
 }
 
 void send_surface_map(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !view || !view->xdg_surface)
+    if (!instance || !instance->pigeon_flutter_api || !view || !view->xdg_surface)
     {
         return;
     }
@@ -87,8 +88,13 @@ void send_surface_map(SparrowView *view)
         {flutter::EncodableValue("max_height"), flutter::EncodableValue((int64_t)max_h)},
     };
 
-    instance->wlroots_channel->InvokeMethod("surface_map",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceMap(
+        map,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_map error: %s", err.message().c_str());
+    });
 
     // Initialize foreign toplevel handle (wlr_foreign_toplevel_management_v1)
     if ((instance->foreign_toplevel_manager != nullptr) &&
@@ -163,74 +169,79 @@ void send_surface_map(SparrowView *view)
 void send_surface_unmap(uint32_t handle)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel)
+    if (!instance || !instance->pigeon_flutter_api)
     {
         return;
     }
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)handle)},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_unmap",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceUnmap(
+        handle,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_unmap error: %s", err.message().c_str());
+    });
 }
 
 void send_surface_geometry(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !view || !view->xdg_surface || !view->xdg_surface->surface)
+    if (!instance || !instance->pigeon_flutter_api || !view || !view->xdg_surface ||
+        !view->xdg_surface->surface)
     {
         return;
     }
 
     struct wlr_surface *surface = view->xdg_surface->surface;
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)view->handle)},
-        {flutter::EncodableValue("width"), flutter::EncodableValue((int64_t)view->width)},
-        {flutter::EncodableValue("height"), flutter::EncodableValue((int64_t)view->height)},
-        {flutter::EncodableValue("buffer_width"), flutter::EncodableValue((int64_t)surface->current.width)},
-        {flutter::EncodableValue("buffer_height"), flutter::EncodableValue((int64_t)surface->current.height)},
-        {flutter::EncodableValue("geo_x"), flutter::EncodableValue((int64_t)view->geo_x)},
-        {flutter::EncodableValue("geo_y"), flutter::EncodableValue((int64_t)view->geo_y)},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_geometry",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceGeometry(
+        view->handle,
+        view->width,
+        view->height,
+        surface->current.width,
+        surface->current.height,
+        view->geo_x,
+        view->geo_y,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_geometry error: %s", err.message().c_str());
+    });
 }
 
 void send_surface_minimize(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel || !view)
+    if (!instance || !instance->pigeon_flutter_api || !view)
     {
         return;
     }
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)view->handle)},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_minimize",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceMinimize(
+        view->handle,
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_minimize error: %s", err.message().c_str());
+    });
 }
 
 void send_surface_request_activate(uint32_t handle,
     const char *token, const char *app_id)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->wlroots_channel)
+    if (!instance || !instance->pigeon_flutter_api)
     {
         return;
     }
 
-    auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)handle)},
-        {flutter::EncodableValue("token"), flutter::EncodableValue(token ? token : "")},
-        {flutter::EncodableValue("app_id"), flutter::EncodableValue(app_id ? app_id : "")},
-    };
-
-    instance->wlroots_channel->InvokeMethod("surface_request_activate",
-        std::make_unique<flutter::EncodableValue>(map));
+    instance->pigeon_flutter_api->SurfaceRequestActivate(
+        handle,
+        token ? token : "",
+        app_id ? app_id : "",
+        [] () {},
+        [] (const sparrow::FlutterError & err)
+    {
+        wlr_log(WLR_ERROR, "surface_request_activate error: %s", err.message().c_str());
+    });
 }

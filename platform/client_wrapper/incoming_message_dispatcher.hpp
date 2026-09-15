@@ -1,4 +1,5 @@
-#pragma once
+#ifndef INCOMING_MESSAGE_DISPATCHER_HPP
+#define INCOMING_MESSAGE_DISPATCHER_HPP
 
 #include <flutter_embedder.h>
 #include "binary_messenger.hpp"
@@ -43,7 +44,7 @@ class IncomingMessageDispatcher
     // Replaces any existing callback. Pass a null callback to unregister the
     // existing callback.
     void SetMessageCallback(const std::string& channel,
-        FlutterDesktopMessageCallback callback,
+        const FlutterDesktopMessageCallback& callback,
         void *user_data);
 
     // Enables input blocking on the given channel name.
@@ -57,3 +58,5 @@ class IncomingMessageDispatcher
 
     std::set<std::string> input_blocking_channels_;
 };
+
+#endif

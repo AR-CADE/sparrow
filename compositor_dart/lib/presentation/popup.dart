@@ -13,7 +13,7 @@ import 'package:material_ui/material_ui.dart'
 /// Widget for rendering popup surfaces (menus, dropdowns, tooltips).
 /// Handles input through Flutter and forwards to wlroots via platform channel.
 class PopupView extends StatelessWidget {
-  const PopupView({
+  const new({
     required this.popup,
     required this.freeze,
     this.ratio = 1.0,
@@ -25,10 +25,7 @@ class PopupView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final controller = PopupPlatformViewController(
-      popup: popup,
-      ratio: ratio,
-    );
+    final controller = PopupPlatformViewController(popup: popup, ratio: ratio);
     // Use Listener to capture all pointer events and forward to wlroots
     // This maintains Flutter-first architecture while enabling popup input
     return Listener(

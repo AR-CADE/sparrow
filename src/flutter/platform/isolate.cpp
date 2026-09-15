@@ -3,7 +3,6 @@
 
 #include <map>
 #include <mutex>
-#include <memory>
 #include <string>
 #include <sstream>
 #include <iomanip>
@@ -55,7 +54,7 @@ void sparrow_isolate_channel_init()
 
     instance->messenger.SetMessageHandler(
         "flutter/isolate",
-        [] (const uint8_t *message, size_t message_size, BinaryReply reply)
+        [] (const uint8_t *message, size_t message_size, const BinaryReply & reply)
     {
         if (!message || (message_size == 0))
         {

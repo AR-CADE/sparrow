@@ -397,22 +397,27 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
         }
     }
 
+    bool is_visible = !popup->parent_view || sparrow_view_is_visible(popup->parent_view);
+
     // Mark texture as needing update
-    if (popup->texture_registered)
+    if (is_visible && popup->texture_registered)
     {
         instance->embedder_api.MarkExternalTextureFrameAvailable(instance->engine,
             popup->texture_id);
     }
 
-    if (instance->show_fps)
+    if (is_visible)
     {
-        struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
-        instance->record_client_commit(now_us);
-    }
+        if (instance->show_fps)
+        {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
+            instance->record_client_commit(now_us);
+        }
 
-    sparrow_popup_damage_whole(popup);
+        sparrow_popup_damage_whole(popup);
+    }
 }
 
 static void popup_handle_reposition(struct wl_listener *listener, void *data)
@@ -609,7 +614,8 @@ void sparrow_focus_popup(SparrowPopup *popup)
     }
 
     // Always keep parent toplevel activated while popup is active
-    if (popup->parent_view && popup->parent_view->toplevel)
+    if (popup->parent_view && popup->parent_view->toplevel &&
+        popup->parent_view->xdg_surface && popup->parent_view->xdg_surface->initialized)
     {
         wlr_xdg_toplevel_set_activated(popup->parent_view->toplevel, true);
         popup->parent_view->activated = true;

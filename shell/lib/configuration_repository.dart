@@ -20,9 +20,9 @@ String? _getHomeConfig() {
 }
 
 class ConfigurationRepository extends ChangeNotifier {
-  factory ConfigurationRepository() => instance;
+  factory() => instance;
 
-  ConfigurationRepository._();
+  new _();
 
   static final ConfigurationRepository instance = ConfigurationRepository._();
 

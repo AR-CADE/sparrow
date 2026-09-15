@@ -1,7 +1,5 @@
 import 'dart:async' show StreamSubscription, unawaited;
 
-import 'package:compositor_dart/core/constants.dart'
-    show KeyStatus, physicalToXkbMap;
 import 'package:compositor_dart/data/models/compositor_event.dart'
     show CompositorEvent;
 import 'package:compositor_dart/data/models/popup.dart' show Popup;
@@ -17,18 +15,14 @@ import 'package:compositor_dart/presentation/popup.dart' show PopupView;
 import 'package:material_ui/material_ui.dart'
     show
         BuildContext,
-        Center,
         Clip,
         ClipRect,
-        ColoredBox,
-        Colors,
-        Focus,
         HitTestBehavior,
-        KeyEventResult,
         LayoutBuilder,
         Listener,
         Positioned,
         RepaintBoundary,
+        Size,
         SizedBox,
         Stack,
         State,
@@ -37,10 +31,9 @@ import 'package:material_ui/material_ui.dart'
         Texture,
         ValueKey,
         Widget;
-import 'package:flutter/services.dart' show KeyDownEvent;
 
 class SurfaceView extends StatefulWidget {
-  const SurfaceView({
+  const new({
     required this.surface,
     super.key,
     this.interactive = true,
@@ -159,59 +152,30 @@ class _SurfaceViewState extends State<SurfaceView> {
           return const SizedBox.shrink();
         }
 
+        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+          controller.size = Size(constraints.maxWidth, constraints.maxHeight);
+        }
+
         final scaleX = constraints.maxWidth / surfW;
         final scaleY = constraints.maxHeight / surfH;
-        final scale = scaleX < scaleY ? scaleX : scaleY;
+        // final scale = scaleX < scaleY ? scaleX : scaleY;
 
         return SizedBox.expand(
-          child: Focus(
-            onKeyEvent: widget.interactive
-                ? (node, event) {
-                    final KeyStatus status;
-
-                    if (event is KeyDownEvent) {
-                      status = KeyStatus.pressed;
-                    } else {
-                      status = KeyStatus.released;
-                    }
-
-                    final keycode =
-                        physicalToXkbMap[event.physicalKey.usbHidUsage];
-
-                    // print("keycode pressed $keycode");
-
-                    if (keycode != null) {
-                      unawaited(
-                        CompositorRepository().platform.surfaceSendKey(
-                          widget.surface,
-                          keycode,
-                          status,
-                          event.timeStamp,
-                        ),
-                      );
-
-                      return KeyEventResult.handled;
-                    }
-
-                    return KeyEventResult.ignored;
-                  }
-                : null,
-            child: MeasureSize(
-              onChange: (size) {
-                if (size != null) {
-                  controller.size = size;
-                }
-              },
-              child: SurfaceTree(
-                controller: controller,
-                interactive: widget.interactive,
-                freeze: widget.freeze,
-                surface: widget.surface,
-                popups: _popups,
-                subSurfaces: _subsurfaces,
-                scaleX: scaleX,
-                scaleY: scaleY,
-              ),
+          child: MeasureSize(
+            onChange: (size) {
+              if (size != null) {
+                controller.size = size;
+              }
+            },
+            child: SurfaceTree(
+              controller: controller,
+              interactive: widget.interactive,
+              freeze: widget.freeze,
+              surface: widget.surface,
+              popups: _popups,
+              subSurfaces: _subsurfaces,
+              scaleX: scaleX,
+              scaleY: scaleY,
             ),
           ),
         );
@@ -221,7 +185,7 @@ class _SurfaceViewState extends State<SurfaceView> {
 }
 
 class SurfaceTree extends StatelessWidget {
-  const SurfaceTree({
+  const new({
     required this.surface,
     required this.subSurfaces,
     required this.popups,
@@ -244,10 +208,7 @@ class SurfaceTree extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Widget mainSurface = MainSurface(
-      surface: surface,
-      freeze: freeze,
-    );
+    final Widget mainSurface = MainSurface(surface: surface, freeze: freeze);
 
     final Widget interactiveMain = Listener(
       onPointerDown: interactive ? controller.dispatchPointerEvent : null,
@@ -287,7 +248,6 @@ class SurfaceTree extends StatelessWidget {
       return interactiveMain;
     }
 
-    // Render toplevel + popups as a Stack
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -308,11 +268,7 @@ class SurfaceTree extends StatelessWidget {
 }
 
 class MainSurface extends StatelessWidget {
-  const MainSurface({
-    required this.surface,
-    required this.freeze,
-    super.key,
-  });
+  const new({required this.surface, required this.freeze, super.key});
 
   final Surface surface;
   final bool freeze;
@@ -378,7 +334,7 @@ class MainSurface extends StatelessWidget {
 }
 
 class Popups extends StatelessWidget {
-  const Popups({
+  const new({
     required this.popups,
     required this.freeze,
     this.scaleX = 1.0,
@@ -422,7 +378,7 @@ class Popups extends StatelessWidget {
 }
 
 class SubSurfaces extends StatelessWidget {
-  const SubSurfaces({
+  const new({
     required this.subsurfaces,
     required this.freeze,
     this.scaleX = 1.0,
@@ -443,72 +399,69 @@ class SubSurfaces extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        ...subsurfaces.map(
-          (subSurface) {
-            final visW = (subSurface.width != null && subSurface.width! > 0)
-                ? subSurface.width!.toDouble() * scaleX
-                : 0.0;
-            final visH = (subSurface.height != null && subSurface.height! > 0)
-                ? subSurface.height!.toDouble() * scaleY
-                : 0.0;
-            final bufW =
-                (subSurface.bufferWidth != null && subSurface.bufferWidth! > 0)
-                ? subSurface.bufferWidth!.toDouble() * scaleX
-                : visW;
-            final bufH =
-                (subSurface.bufferHeight != null &&
-                    subSurface.bufferHeight! > 0)
-                ? subSurface.bufferHeight!.toDouble() * scaleY
-                : visH;
+        ...subsurfaces.map((subSurface) {
+          final visW = (subSurface.width != null && subSurface.width! > 0)
+              ? subSurface.width!.toDouble() * scaleX
+              : 0.0;
+          final visH = (subSurface.height != null && subSurface.height! > 0)
+              ? subSurface.height!.toDouble() * scaleY
+              : 0.0;
+          final bufW =
+              (subSurface.bufferWidth != null && subSurface.bufferWidth! > 0)
+              ? subSurface.bufferWidth!.toDouble() * scaleX
+              : visW;
+          final bufH =
+              (subSurface.bufferHeight != null && subSurface.bufferHeight! > 0)
+              ? subSurface.bufferHeight!.toDouble() * scaleY
+              : visH;
 
-            final Widget content;
-            if (bufH > visH && visH > 0) {
-              content = ClipRect(
-                child: SizedBox(
-                  width: visW,
-                  height: visH,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned(
-                        left: 0,
-                        top: 0,
-                        width: bufW,
-                        height: bufH,
-                        child: Texture(
-                          freeze: freeze,
-                          textureId: subSurface.textureId,
-                          filterQuality: .none,
-                        ),
+          final Widget content;
+          if (bufH > visH && visH > 0) {
+            content = ClipRect(
+              child: SizedBox(
+                width: visW,
+                height: visH,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: bufW,
+                      height: bufH,
+                      child: Texture(
+                        freeze: freeze,
+                        textureId: subSurface.textureId,
+                        filterQuality: .none,
                       ),
-                    ],
-                  ),
-                ),
-              );
-            } else {
-              content = Texture(
-                freeze: freeze,
-                textureId: subSurface.textureId,
-                filterQuality: .none,
-              );
-            }
-
-            return Positioned(
-              key: ValueKey(subSurface.handle),
-              left: (subSurface.x ?? 0).toDouble() * scaleX,
-              top: (subSurface.y ?? 0).toDouble() * scaleY,
-              width: visW > 0 ? visW : (bufW > 0 ? bufW : null),
-              height: visH > 0 ? visH : (bufH > 0 ? bufH : null),
-              child: RepaintBoundary(
-                child: SizedBox(
-                  width: visW > 0 ? visW : (bufW > 0 ? bufW : null),
-                  height: visH > 0 ? visH : (bufH > 0 ? bufH : null),
-                  child: content,
+                    ),
+                  ],
                 ),
               ),
             );
-          },
-        ),
+          } else {
+            content = Texture(
+              freeze: freeze,
+              textureId: subSurface.textureId,
+              filterQuality: .none,
+            );
+          }
+
+          return Positioned(
+            key: ValueKey(subSurface.handle),
+            left: (subSurface.x ?? 0).toDouble() * scaleX,
+            top: (subSurface.y ?? 0).toDouble() * scaleY,
+            width: visW > 0 ? visW : (bufW > 0 ? bufW : null),
+            height: visH > 0 ? visH : (bufH > 0 ? bufH : null),
+            child: RepaintBoundary(
+              child: SizedBox(
+                width: visW > 0 ? visW : (bufW > 0 ? bufW : null),
+                height: visH > 0 ? visH : (bufH > 0 ? bufH : null),
+                child: content,
+              ),
+            ),
+          );
+        }),
       ],
     );
   }

@@ -32,4 +32,11 @@ void send_gesture_swipe_update(double dx, double dy,
 
 void send_gesture_swipe_end(bool cancelled, uint32_t time_msec);
 
+void send_zoom_scroll(double delta_y, double x, double y);
+
+void send_zoom_key(int action);
+
+bool send_flutter_key_event(uint32_t xkb_keycode, uint32_t sym,
+    uint32_t unicode, bool pressed, uint32_t modifiers, uint32_t time_msec);
+
 #endif

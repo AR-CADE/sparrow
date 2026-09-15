@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 function clean() {
     echo -e '\nCleaning sparrow...\n'
     rm -rf build
@@ -11,17 +13,28 @@ function clean() {
     rm -rf subprojects/flutter_embedder/*.h
     rm -rf subprojects/flutter_embedder/*.md
     rm -rf subprojects/wlroots
+    rm -rf subprojects/wleird
+    rm -rf subprojects/compositor-killer
+    rm -rf build-ck
     rm -rf out
     rm -rf sparrow.prof*
+    rm -rf platform/pigeon/compositor/cpp/*.g.*
+    rm -rf platform/pigeon/compositor/gobject/*.g.*
+    rm -rf platform/pigeon/compositor/pigeon_compositor/lib/src/*.g.dart
+    rm -rf platform/pigeon/runner/cpp/*.g.*
+    rm -rf platform/pigeon/runner/gobject/*.g.*
+    rm -rf platform/pigeon/runner/pigeon_runner/lib/src/*.g.dart
 }
 
 function show_help() {
     echo "Usage: ./build.sh [OPTIONS...]"
     echo ""
     echo "Build Modes (choose one base mode, default is release):"
-    echo "  release (default)   Optimized release build (PGO + LTO enabled by default)"
+    echo "  release (default)   Optimized build, automated 3-stage PGO pipeline"
+    echo "  optimize            Optimized build with LTO (uses PGO if sparrow.profdata exists)"
     echo "  debug               Debug build with symbols, no optimizations"
-    echo "  profile             Instrumented build to generate PGO profile"
+    echo "  profile             Flutter profile build with Dart VM service & DevTools enabled"
+    echo "  pgo-generate        Instrumented build for PGO profile data collection (-fprofile-instr-generate)"
     echo "  asan                Debug build with AddressSanitizer (ASan)"
     echo "  tsan                Debug build with ThreadSanitizer (TSan)"
     echo "  ubsan               Debug build with UndefinedBehaviorSanitizer (UBSan)"
@@ -32,28 +45,37 @@ function show_help() {
     echo "  no-vulkan           Disable Vulkan backend (-Denable_vulkan=false)"
     echo "  impeller            Enable Impeller rendering backend (-Denable_impeller=true)"
     echo "  no-impeller         Disable Impeller backend (-Denable_impeller=false)"
-    echo "  pgo / no-pgo        Enable / disable PGO in release mode"
+    echo "  pgo / no-pgo        Force enable / disable PGO in optimize mode"
     echo "  dmabuf              Enable direct DMA-buf (-Denable_dmabuf=true)"
     echo "  no-dmabuf           Disable direct DMA-buf (-Denable_dmabuf=false)"
     echo "  damage-history      Enable damage history tracking (-Denable_damage_history=true)"
     echo "  no-damage-history   Disable damage history tracking (-Denable_damage_history=false)"
+    echo "  pigeon              Regenerate Pigeon C++ and Dart message bindings"
+    echo "  tidy / clang-tidy   Run Clang-Tidy static analysis on C++ codebase"
+    echo "  tidy-fix            Run Clang-Tidy with automatic fix application"
     echo "  server / no-client  Build only the C++ server binary"
     echo "  client / no-server  Build only the Flutter client shell"
     echo "  --host-path=<path>  Path to custom engine artifacts (e.g. flutter/engine/host_profile)"
     echo "  clean               Remove build/ and out/ directories"
     echo ""
     echo "Examples:"
-    echo "  ./build.sh                               # Release using system/downloaded engine"
-    echo "  ./build.sh --host-path=flutter/engine/host_release # Release with custom engine"
-    echo "  ./build.sh profile --host-path=flutter/engine/host_profile # Profile with VM Service"
-    echo "  ./build.sh no-impeller                   # Release with Skia (Skia + DMA-BUF + PGO + LTO)"
-    echo "  ./build.sh vulkan                        # Release (Vulkan + Impeller + PGO + LTO)"
+    echo "  ./build.sh                               # Release (Automated 3-stage PGO pipeline)"
+    echo "  ./build.sh release                       # Release (Automated 3-stage PGO pipeline)"
+    echo "  ./build.sh optimize                      # Direct optimized build (LTO + PGO if sparrow.profdata exists)"
+    echo "  ./build.sh optimize server               # Direct optimized build of C++ server only"
+    echo "  ./build.sh pgo-generate                  # Compile instrumented server for PGO profiling"
+    echo "  ./build.sh profile --host-path=flutter/engine/host_profile # Profile with Dart VM Service"
+    echo "  ./build.sh no-impeller                   # Release with Skia (Skia + DMA-BUF + LTO)"
+    echo "  ./build.sh vulkan                        # Release with Vulkan (Vulkan + Impeller + LTO)"
     echo "  ./build.sh asan                          # ASan debug"
-    echo "  ./build.sh profile                       # PGO profile generation"
     echo "  ./build.sh tsan                          # TSan debug"
+    echo "  ./build.sh ubsan                         # UBSan debug"
     echo "  ./build.sh valgrind                      # Valgrind debug"
     echo "  ./build.sh debug server                  # Debug C++ server only"
     echo "  ./build.sh client                        # Rebuild Flutter client shell only"
+    echo "  ./build.sh pigeon                        # Regenerate Pigeon message bindings"
+    echo "  ./build.sh tidy                          # Run Clang-Tidy static analysis"
+    echo "  ./build.sh tidy-fix                      # Run Clang-Tidy with auto-fix"
 }
 
 # --- Default Configuration ---
@@ -61,6 +83,7 @@ BUILD_TYPE="release"
 ENABLE_IMPELLER=true
 ENABLE_VULKAN=false
 ENABLE_DAMAGE_HISTORY=true
+ENABLE_TRACE=false
 PGO=true
 PGO_INSTRUMENT=false
 PROFILING=false
@@ -73,14 +96,57 @@ LTO=true
 DMABUF=true
 SKIP_CLIENT=false
 SKIP_SERVER=false
+RUN_PIGEON=false
 HOST_PATH=""
 EXTRA_MESON_ARGS=()
+FORCE_REGENERATE_PIGEON=false
+
+# Direct delegation for automated PGO pipeline (release mode)
+DO_RELEASE_PIPELINE=false
+if [ $# -eq 0 ]; then
+    DO_RELEASE_PIPELINE=true
+fi
+for arg in "$@"; do
+    case "$arg" in
+        release|--release)
+            DO_RELEASE_PIPELINE=true
+            ;;
+        optimize|--optimize|debug|--debug|asan|--asan|tsan|--tsan|ubsan|--ubsan|valgrind|--valgrind|pgo-generate|--pgo-generate|pgo-instrument|--pgo-instrument|pgo-train|--pgo-train|profile|--profile|profiling|clean|help|-h|--help|client|server|pigeon|--pigeon|tidy|--tidy|clang-tidy|--clang-tidy|tidy-fix|--tidy-fix|clang-tidy-fix|--clang-tidy-fix)
+            DO_RELEASE_PIPELINE=false
+            break
+            ;;
+    esac
+done
+
+if [ "$DO_RELEASE_PIPELINE" = true ]; then
+    PASSTHROUGH_ARGS=()
+    for arg in "$@"; do
+        if [ "$arg" != "release" ] && [ "$arg" != "--release" ]; then
+            PASSTHROUGH_ARGS+=("$arg")
+        fi
+    done
+    exec "${SCRIPT_DIR}/tools/bot/pgo_optimize.sh" "${PASSTHROUGH_ARGS[@]}"
+fi
 
 # --- Parse Arguments ---
 for arg in "$@"; do
     case "$arg" in
         clean)
             clean
+            exit 0
+            ;;
+        tidy|--tidy|clang-tidy|--clang-tidy)
+            echo -e "\n=========================================="
+            echo " Running Clang-Tidy Static Analysis"
+            echo -e "==========================================\n"
+            ninja -C build clang-tidy
+            exit 0
+            ;;
+        tidy-fix|--tidy-fix|clang-tidy-fix|--clang-tidy-fix)
+            echo -e "\n=========================================="
+            echo " Running Clang-Tidy with Automatic Fixes"
+            echo -e "==========================================\n"
+            ninja -C build clang-tidy-fix
             exit 0
             ;;
         help|-h|--help)
@@ -97,7 +163,7 @@ for arg in "$@"; do
             PGO=false
             PGO_INSTRUMENT=false
             ;;
-        release|--release)
+        optimize|--optimize|release|--release)
             BUILD_TYPE="release"
             PGO_INSTRUMENT=false
             ;;
@@ -177,11 +243,24 @@ for arg in "$@"; do
         no-damage-history|--no-damage-history|-Denable_damage_history=false)
             ENABLE_DAMAGE_HISTORY=false
             ;;
+        trace|--trace|gpu-trace|--gpu-trace|-Denable_trace=true)
+            ENABLE_TRACE=true
+            ;;
+        no-trace|--no-trace|-Denable_trace=false)
+            ENABLE_TRACE=false
+            ;;
         server-only|--server-only|server|--server|no-client|--no-client)
             SKIP_CLIENT=true
             ;;
         client-only|--client-only|client|--client|no-server|--no-server)
             SKIP_SERVER=true
+            ;;
+        pigeon|--pigeon)
+            RUN_PIGEON=true
+            ;;
+        force-pigeon|--force-pigeon)
+            RUN_PIGEON=true
+            FORCE_REGENERATE_PIGEON=true
             ;;
         -D*|--*)
             EXTRA_MESON_ARGS+=("$arg")
@@ -203,8 +282,22 @@ if [ -z "$HOST_PATH" ]; then
     fi
 fi
 
-if [ "$PGO" = true ] && [ ! -f "sparrow.profdata" ]; then
-    PGO=false
+if [ "$PGO" = true ]; then
+    if [ -f "sparrow.profdata" ]; then
+        echo -e "\033[0;32m[PGO] Profile dataset found: sparrow.profdata ($(du -h sparrow.profdata | cut -f1)) - PGO enabled (-fprofile-instr-use)\033[0m"
+        NEWER_SRC=$(find src -type f \( -name "*.cpp" -o -name "*.hpp" \) -newer sparrow.profdata 2>/dev/null | head -n 3)
+        if [ -n "$NEWER_SRC" ]; then
+            echo -e "\033[1;33m[PGO ALERT] Source files modified since sparrow.profdata was generated!\033[0m"
+            echo -e "\033[1;33m            Profile data may contain obsolete functions (-Wprofile-instr-out-of-date).\033[0m"
+            echo -e "\033[1;33m            Run ./build.sh release to retrain and regenerate sparrow.profdata.\033[0m"
+        fi
+    else
+        echo -e "\033[1;33m[PGO] Notice: sparrow.profdata not found. Building release without PGO.\033[0m"
+        echo -e "\033[1;33m      To run the automated PGO pipeline, run: ./build.sh release\033[0m\n"
+        PGO=false
+    fi
+elif [ "$PGO_INSTRUMENT" = true ]; then
+    echo -e "\033[0;36m[PGO] PGO Instrumentation active (-fprofile-instr-generate)\033[0m\n"
 fi
 
 # --- Construct Meson Options ---
@@ -221,12 +314,21 @@ MESON_ARGS+=("-Ddisable_optimizations=$DISABLE_OPTS")
 MESON_ARGS+=("-Dlto=$LTO")
 MESON_ARGS+=("-Denable_dmabuf=$DMABUF")
 MESON_ARGS+=("-Denable_damage_history=$ENABLE_DAMAGE_HISTORY")
+MESON_ARGS+=("-Denable_trace=$ENABLE_TRACE")
 
 if [ ${#EXTRA_MESON_ARGS[@]} -gt 0 ]; then
     MESON_ARGS+=("${EXTRA_MESON_ARGS[@]}")
 fi
 
 function build_server() {
+    if [ "$ENABLE_TRACE" = "true" ]; then
+        if [ ! -f "subprojects/perfetto/perfetto.h" ] || [ ! -f "subprojects/perfetto/perfetto.cc" ]; then
+            echo -e "\033[0;36m[TRACE] Downloading Perfetto C++ SDK (v48.1)...\033[0m"
+            mkdir -p subprojects/perfetto
+            curl -sSL https://github.com/google/perfetto/releases/download/v48.1/perfetto-sdk-v48.1.tar.gz | tar -xz -C subprojects/perfetto/ perfetto.h perfetto.cc
+        fi
+    fi
+
     echo -e "\n=========================================="
     echo " Configuring Sparrow Server"
     echo " Options: ${MESON_ARGS[*]}"
@@ -280,64 +382,21 @@ function build_client() {
     $LOCAL_BIN/flutter build linux --release
     cd ..
 
-    cp -rfp shell/build/linux/x64/release/bundle/data/ build/shell/ || echo "Error: Failed to copy shell data "
-    cp -rfp shell/build/linux/x64/release/bundle/lib/* build/shell/lib/ || echo "Error: Failed to copy shell lib "
-    rm -rf build/shell/lib/libapp.so
-    rm -rf build/shell/lib/libflutter_linux_gtk.so
-
-    LOCAL_ENGINE=$LOCAL_BIN/cache
-    GEN_SNAPSHOT_BIN="$LOCAL_ENGINE/dart-sdk/bin/utils/gen_snapshot"
-    PATCHED_SDK_PATH="$LOCAL_ENGINE/artifacts/engine/common/flutter_patched_sdk"
-
-    DART_VM_FLAG="-Ddart.vm.product=true"
-    GEN_SNAPSHOT_FLAGS="--obfuscate --strip"
-
+    local OPTIMIZE_ARGS=()
     if [ "$PROFILING" = true ]; then
-        if [ -n "$HOST_PATH" ] && [ -d "$HOST_PATH" ]; then
-            DART_VM_FLAG="-Ddart.vm.profile=true"
-            GEN_SNAPSHOT_FLAGS=""
-            echo -e "Client mode: Profile with custom engine (Dart VM Service enabled with -Ddart.vm.profile=true)\n"
-        else
-            echo -e "Notice: Profile mode requested without custom engine artifacts (--host-path=...)."
-            echo -e "Falling back to Release AOT product (-Ddart.vm.product=true) to match system engine.\n"
-        fi
-    else
-        echo -e "Client mode: Release (AOT Product with -Ddart.vm.product=true)\n"
+        OPTIMIZE_ARGS+=("--profiling")
     fi
-
     if [ -n "$HOST_PATH" ] && [ -d "$HOST_PATH" ]; then
-        if [ -f "$HOST_PATH/gen_snapshot" ]; then
-            GEN_SNAPSHOT_BIN="$HOST_PATH/gen_snapshot"
-        fi
-        if [ -d "$HOST_PATH/flutter_patched_sdk" ]; then
-            PATCHED_SDK_PATH="$HOST_PATH/flutter_patched_sdk"
-        fi
-        echo -e "Using custom engine artifacts from: $HOST_PATH\n"
+        OPTIMIZE_ARGS+=("--host-path=$HOST_PATH")
+    fi
+    if [ -n "$LOCAL_BIN" ]; then
+        OPTIMIZE_ARGS+=("--flutter-bin=$LOCAL_BIN")
     fi
 
-    # Generate .dill snapshot
-    echo -e '\nGenerate .dill snapshot...\n'
-    $LOCAL_ENGINE/dart-sdk/bin/dartaotruntime \
-    $LOCAL_ENGINE/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot \
-    --sdk-root "$PATCHED_SDK_PATH" \
-    --target=flutter \
-    --aot \
-    --tfa \
-    $DART_VM_FLAG \
-    --packages shell/.dart_tool/package_config.json \
-    --output-dill build/kernel_snapshot.dill \
-    --verbose \
-    --depfile build/kernel_snapshot.d \
-    shell/lib/main.dart
-
-    # Generate optimized app.so
-    echo -e '\nGenerate app.so...\n'
-    "$GEN_SNAPSHOT_BIN" \
-    --deterministic \
-    --snapshot_kind=app-aot-elf \
-    $GEN_SNAPSHOT_FLAGS \
-    --elf=build/shell/app.so \
-    build/kernel_snapshot.dill
+    ./tools/optimize_bundle.sh "${OPTIMIZE_ARGS[@]}" \
+        --project-dir=shell \
+        shell/build/linux/x64/release/bundle \
+        build/shell
 }
 
 function build_out() {
@@ -347,6 +406,10 @@ function build_out() {
     fi
     if [ "$SKIP_SERVER" = false ] && [ -f build/src/sparrow ]; then
         cp -rfp build/src/sparrow out/
+        if [ -f build/src/runner/sparrow-app-runner ]; then
+            cp -rfp build/src/runner/sparrow-app-runner out/
+            echo -e "Installed sparrow-app-runner into out/\n"
+        fi
         mkdir -p out/shell/lib
         if [ -f build/subprojects/wlroots/libwlroots-0.20.so ]; then
             cp -rfp build/subprojects/wlroots/libwlroots-0.20.so out/shell/lib/
@@ -363,10 +426,78 @@ function build_out() {
         else
             echo -e "No custom engine specified via --host-path; dynamic linker will fallback to system library.\n"
         fi
+
+        if [ -d build/subprojects/wleird ]; then
+            mkdir -p out/wleird
+            find build/subprojects/wleird -maxdepth 1 -type f -name "wleird-*" -exec cp -f {} out/wleird/ \;
+            echo -e "Installed wleird stress-test suite into out/wleird/\n"
+        fi
+
+        if [ -f build-ck/compositor-killer ]; then
+            cp -fp build-ck/compositor-killer out/
+            echo -e "Installed compositor-killer into out/\n"
+        fi
     fi
 }
 
+function generate_pigeon() {
+    echo -e '\n=========================================='
+    echo " Generating Pigeon APIs"
+    echo -e "==========================================\n"
+
+    if [ -z "$LOCAL_BIN" ]; then
+        if which flutter >/dev/null 2>&1; then
+            LOCAL_BIN="$(dirname "$(which flutter)")"
+        elif [ -d "$HOME/.local/share/flutter/bin" ]; then
+            LOCAL_BIN="$HOME/.local/share/flutter/bin"
+        elif [ -d /opt/flutter/bin ]; then
+            LOCAL_BIN="/opt/flutter/bin"
+        else
+            LOCAL_BIN=~/.local/share/flutter/bin
+        fi
+    fi
+
+    cd platform/pigeon/compositor/pigeon_compositor
+    $LOCAL_BIN/flutter clean
+    $LOCAL_BIN/flutter pub get
+    $LOCAL_BIN/flutter pub upgrade
+    $LOCAL_BIN/dart run pigeon --input pigeons/messages.dart
+    cd ../../runner/pigeon_runner
+    $LOCAL_BIN/flutter clean
+    $LOCAL_BIN/flutter pub get
+    $LOCAL_BIN/flutter pub upgrade
+    $LOCAL_BIN/dart run pigeon --input pigeons/messages.dart
+
+    cd ../../../..
+    echo -e '\n Pigeon generation complete!\n'
+}
+
 # --- Execution ---
+if [ "$FORCE_REGENERATE_PIGEON" = false ]; then
+    if [ -z "$(ls -A platform/pigeon/compositor/cpp)" ] ||
+    [ -z "$(ls -A platform/pigeon/compositor/gobject)" ] ||
+    [ -z "$(ls -A platform/pigeon/compositor/pigeon_compositor/lib/src)" ] ||
+    [ -z "$(ls -A platform/pigeon/runner/cpp)" ] ||
+    [ -z "$(ls -A platform/pigeon/runner/gobject)" ] ||
+    [ -z "$(ls -A platform/pigeon/runner/pigeon_runner/lib/src)" ]; then
+        FORCE_REGENERATE_PIGEON=true
+        echo -e '\n Detected missing Pigeon APIs, regenerating...\n'
+    fi
+fi
+
+if [ "$RUN_PIGEON" = true ] || [ "$FORCE_REGENERATE_PIGEON" = true ]; then
+    echo -e '\n Re-generating Pigeon APIs...\n'
+    generate_pigeon
+
+    if [ "$RUN_PIGEON" = true ]; then
+        exit 0
+    fi
+
+    if [ "$FORCE_REGENERATE_PIGEON" = false ] && [ "$SKIP_SERVER" = false ] && [ "$SKIP_CLIENT" = false ] && [ $# -eq 1 ]; then
+        exit 0
+    fi
+fi
+
 if [ "$SKIP_SERVER" = false ]; then
     build_server
 fi

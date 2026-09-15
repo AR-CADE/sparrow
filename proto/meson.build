@@ -31,6 +31,7 @@ server_protocols = [
     [wl_protocol_dir, 'staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml'],
     [wl_protocol_dir, 'staging/cursor-shape/cursor-shape-v1.xml'],
     [meson.current_source_dir(), 'wlr-output-power-management-unstable-v1.xml'],
+    [meson.current_source_dir(), 'sparrow-ipc-v1.xml'],
 ]
 
 wl_protos_src = []
@@ -49,3 +50,34 @@ sparrow_protos = declare_dependency(
 	link_with: lib_wl_protos,
 	sources: wl_protos_headers,
 )
+
+wayland_scanner_client = generator(
+	wayland_scanner,
+	output: '@BASENAME@-client-protocol.h',
+	arguments: ['client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+client_protocols = [
+	[wl_protocol_dir, 'stable/xdg-shell/xdg-shell.xml'],
+	[wl_protocol_dir, 'stable/tablet/tablet-v2.xml'],
+	[wl_protocol_dir, 'staging/cursor-shape/cursor-shape-v1.xml'],
+	[meson.current_source_dir(), 'sparrow-ipc-v1.xml'],
+]
+
+wl_client_protos_src = []
+wl_client_protos_headers = []
+
+foreach p : client_protocols
+	xml = join_paths(p)
+	wl_client_protos_src += wayland_scanner_code.process(xml)
+	wl_client_protos_headers += wayland_scanner_client.process(xml)
+endforeach
+
+lib_wl_client_protos = static_library('wl_client_protos', wl_client_protos_src + wl_client_protos_headers,
+	dependencies: [wayland_client])
+
+sparrow_client_protos = declare_dependency(
+	link_with: lib_wl_client_protos,
+	sources: wl_client_protos_headers,
+)
+

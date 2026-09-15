@@ -42,7 +42,7 @@ bool IncomingMessageDispatcher::HandleMessage(
 
 void IncomingMessageDispatcher::SetMessageCallback(
     const std::string& channel,
-    FlutterDesktopMessageCallback callback,
+    const FlutterDesktopMessageCallback& callback,
     void *user_data)
 {
     if (!callback)

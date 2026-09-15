@@ -17,6 +17,7 @@
 #include "core.hpp"
 #include "cursor.hpp"
 #include "engine.hpp"
+#include <flutter/platform/pigeon/messages.h>
 #include "engine/callbacks/seat_callback.hpp"
 #include "engine/callbacks/surface_callback.hpp"
 #include "engine/messages/output_message.hpp"
@@ -163,7 +164,7 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
         SparrowView *v    = nullptr;
         wl_list_for_each(v, &instance->views_list, link)
         {
-            if (v && (v->handle == (uint32_t)texture_id))
+            if (v->handle == (uint32_t)texture_id)
             {
                 view = v;
                 break;
@@ -393,225 +394,82 @@ bool engine_cb_renderer_present(void *user_data,
 #endif // FLUTTER_COMPOSITOR
 }
 
-static inline int64_t enc_get_int(const flutter::EncodableValue & val,
-    int64_t default_val = 0)
-{
-    if (std::holds_alternative<int32_t>(val))
-    {
-        return std::get<int32_t>(val);
-    }
-
-    if (std::holds_alternative<int64_t>(val))
-    {
-        return std::get<int64_t>(val);
-    }
-
-    if (std::holds_alternative<bool>(val))
-    {
-        return std::get<bool>(val) ? 1 : 0;
-    }
-
-    return default_val;
-}
-
-static inline double enc_get_double(const flutter::EncodableValue & val,
-    double default_val = 0.0)
-{
-    if (std::holds_alternative<double>(val))
-    {
-        return std::get<double>(val);
-    }
-
-    if (std::holds_alternative<int32_t>(val))
-    {
-        return (double)std::get<int32_t>(val);
-    }
-
-    if (std::holds_alternative<int64_t>(val))
-    {
-        return (double)std::get<int64_t>(val);
-    }
-
-    return default_val;
-}
-
-static inline bool enc_get_bool(const flutter::EncodableValue & val,
-    bool default_val = false)
-{
-    if (std::holds_alternative<bool>(val))
-    {
-        return std::get<bool>(val);
-    }
-
-    if (std::holds_alternative<int32_t>(val))
-    {
-        return std::get<int32_t>(val) != 0;
-    }
-
-    if (std::holds_alternative<int64_t>(val))
-    {
-        return std::get<int64_t>(val) != 0;
-    }
-
-    return default_val;
-}
-
 void sparrow_engine_init_channels()
 {
     Core *instance = Core::instance();
 
-    instance->wlroots_channel =
-        std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-            &instance->messenger, "wlroots",
-            &flutter::StandardMethodCodec::GetInstance());
-
-    instance->wlroots_channel->SetMethodCallHandler(
-        [] (const flutter::MethodCall<flutter::EncodableValue> & call,
-            std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
-            result)
+    class SparrowCompositorHostApi : public sparrow::CompositorHostApi
     {
-        Core *instance = Core::instance();
-        const std::string & method = call.method_name();
-        const auto *args = call.arguments();
+      public:
+        void SurfaceRequestResize(
+            int64_t handle,
+            int64_t width,
+            int64_t height,
+            int64_t request_id,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            sparrow_handle_surface_request_resize(
+                (uint32_t)handle, (int)width, (int)height, (uint64_t)request_id);
+            result(std::nullopt);
+        }
 
-        if (method == "surface_toplevel_set_size")
+        void SurfaceEndResize(
+            int64_t handle,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            struct surface_toplevel_set_size_message msg;
-            if (decode_surface_toplevel_set_size_message(args, &msg))
-            {
-                sparrow_handle_surface_toplevel_set_size(
-                    msg.surface_handle, (int)msg.size_x, (int)msg.size_y);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args",
-                    "Invalid surface_toplevel_set_size args");
-            }
-        } else if (method == "surface_toplevel_set_maximized")
+            sparrow_handle_surface_end_resize((uint32_t)handle);
+            result(std::nullopt);
+        }
+
+        void SurfaceToplevelSetSize(
+            int64_t handle,
+            int64_t width,
+            int64_t height,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            struct surface_toplevel_set_maximized_message msg;
-            if (decode_surface_toplevel_set_maximized_message(args, &msg))
-            {
-                sparrow_handle_surface_toplevel_set_maximized(msg.surface_handle,
-                    msg.maximized != 0);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args",
-                    "Invalid surface_toplevel_set_maximized args");
-            }
-        } else if (method == "surface_toplevel_close")
+            sparrow_handle_surface_toplevel_set_size(
+                (uint32_t)handle, (int)width, (int)height);
+            result(std::nullopt);
+        }
+
+        void SurfaceToplevelSetMaximized(
+            int64_t handle,
+            bool maximized,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            struct surface_toplevel_close_message msg;
-            if (decode_surface_toplevel_close_message(args, &msg))
-            {
-                bool ok = sparrow_handle_surface_toplevel_close(msg.surface_handle);
-                if (ok)
-                {
-                    result->Success();
-                } else
-                {
-                    result->Error("error", "Failed to close toplevel");
-                }
-            } else
-            {
-                result->Error("invalid_args",
-                    "Invalid surface_toplevel_close args");
-            }
-        } else if (method == "surface_focus")
+            sparrow_handle_surface_toplevel_set_maximized(
+                (uint32_t)handle, maximized);
+            result(std::nullopt);
+        }
+
+        void SurfaceToplevelClose(
+            int64_t handle,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
         {
-            struct surface_toplevel_close_message msg;
-            if (decode_surface_toplevel_close_message(args, &msg))
-            {
-                sparrow_handle_surface_focus(msg.surface_handle);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid surface_focus args");
-            }
-        } else if (method == "surface_set_position")
+            bool ok = sparrow_handle_surface_toplevel_close((uint32_t)handle);
+            result(ok);
+        }
+
+        void SurfaceFocus(
+            int64_t handle,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            struct surface_set_position_message msg;
-            if (decode_surface_set_position_message(args, &msg))
-            {
-                sparrow_handle_surface_set_position(msg.surface_handle, (int)msg.x,
-                    (int)msg.y);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid surface_set_position args");
-            }
-        } else if (method == "surface_request_resize")
+            sparrow_handle_surface_focus((uint32_t)handle);
+            result(std::nullopt);
+        }
+
+        void SurfaceClearFocus(
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            if (list && (list->size() >= 4))
-            {
-                uint32_t handle = (uint32_t)enc_get_int((*list)[0]);
-                int width  = (int)enc_get_int((*list)[1]);
-                int height = (int)enc_get_int((*list)[2]);
-                uint64_t req_id = (uint64_t)enc_get_int((*list)[3]);
-                sparrow_handle_surface_request_resize(handle, width, height,
-                    req_id);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args",
-                    "Invalid surface_request_resize args");
-            }
-        } else if (method == "surface_end_resize")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            if (list && (list->size() >= 1))
-            {
-                uint32_t handle = (uint32_t)enc_get_int((*list)[0]);
-                sparrow_handle_surface_end_resize(handle);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid surface_end_resize args");
-            }
-        } else if (method == "surface_pointer_event")
-        {
-            struct surface_pointer_event_message msg;
-            if (decode_surface_pointer_event_message(args, &msg))
-            {
-                sparrow_handle_surface_pointer_event(msg);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid surface_pointer_event args");
-            }
-        } else if (method == "popup_pointer_event")
-        {
-            struct surface_pointer_event_message msg;
-            if (decode_surface_pointer_event_message(args, &msg))
-            {
-                sparrow_handle_popup_pointer_event(msg);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid popup_pointer_event args");
-            }
-        } else if (method == "surface_keyboard_key")
-        {
-            struct surface_keyboard_key_message msg;
-            if (decode_surface_keyboard_key_message(args, &msg))
-            {
-                sparrow_handle_surface_keyboard_key(msg);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args", "Invalid surface_keyboard_key args");
-            }
-        } else if (method == "surface_clear_focus")
-        {
-            auto focused_surface = instance->seat->keyboard_state.focused_surface;
+            Core *core = Core::instance();
+            auto focused_surface = core->seat->keyboard_state.focused_surface;
             if (focused_surface)
             {
                 const struct wlr_xdg_surface *current =
                     wlr_xdg_surface_try_from_wlr_surface(
-                        instance->seat->keyboard_state.focused_surface);
-                if (current && (current->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL))
+                        core->seat->keyboard_state.focused_surface);
+                if (current && current->initialized && (current->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+                    current->toplevel)
                 {
                     wlr_xdg_toplevel_set_activated(current->toplevel, false);
                     SparrowView *curr_view =
@@ -622,193 +480,240 @@ void sparrow_engine_init_channels()
                     }
                 }
 
-                sparrow_pointer_constraints_deactivate(instance);
-                wlr_seat_pointer_clear_focus(instance->seat);
-                wlr_seat_keyboard_clear_focus(instance->seat);
+                sparrow_pointer_constraints_deactivate(core);
+                wlr_seat_pointer_clear_focus(core->seat);
+                wlr_seat_keyboard_clear_focus(core->seat);
                 sparrow_cursor_reset_to_flutter();
             }
 
-            result->Success();
-        } else if (method == "force_render_all_views")
+            result(std::nullopt);
+        }
+
+        void SurfaceSetPosition(
+            int64_t handle,
+            int64_t x,
+            int64_t y,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
         {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            int active =
-                (list && !list->empty()) ? (int)enc_get_int((*list)[0]) : 0;
-            instance->force_render_all_views = (active != 0);
-            if (instance->force_render_all_views)
+            sparrow_handle_surface_set_position((uint32_t)handle, (int)x, (int)y);
+            result(std::nullopt);
+        }
+
+        void ForceRenderAllViews(
+            bool force,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            Core *core = Core::instance();
+            core->force_render_all_views = force;
+            if (core->force_render_all_views)
             {
                 SparrowView *v = nullptr;
-                wl_list_for_each(v, &instance->views_list, link)
+                wl_list_for_each(v, &core->views_list, link)
                 {
-                    if (v && v->texture_registered)
+                    if (v->texture_registered)
                     {
-                        instance->embedder_api.MarkExternalTextureFrameAvailable(
-                            instance->engine, v->texture_id);
+                        core->embedder_api.MarkExternalTextureFrameAvailable(
+                            core->engine, v->texture_id);
                     }
                 }
                 sparrow_damage_add_box(nullptr);
             }
 
-            result->Success();
-        } else if (method == "set_direct_input_mode")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            if (list && (list->size() >= 2))
-            {
-                bool enabled = enc_get_bool((*list)[0]);
-                uint32_t surface_handle     = (uint32_t)enc_get_int((*list)[1]);
-                instance->direct_input_mode = enabled;
-                instance->direct_input_surface = surface_handle;
-                wlr_log(WLR_INFO, "Direct input mode: %s for surface %u",
-                    enabled ? "enabled" : "disabled", surface_handle);
-            }
-
-            result->Success();
-        } else if (method == "debug_set_damage_visualization")
-        {
-            if (args)
-            {
-                const auto *b = std::get_if<bool>(args);
-                if (b)
-                {
-                    instance->debug_damage = *b;
-                } else
-                {
-                    const auto *list = std::get_if<flutter::EncodableList>(args);
-                    if (list && !list->empty())
-                    {
-                        instance->debug_damage = enc_get_bool((*list)[0]);
-                    }
-                }
-
-                wlr_log(WLR_INFO, "Damage visualization: %s",
-                    instance->debug_damage ? "ENABLED" : "DISABLED");
-                sparrow_damage_add_box(nullptr);
-                result->Success();
-            } else
-            {
-                result->Error("invalid_args",
-                    "Invalid debug_set_damage_visualization args");
-            }
-        } else if (method == "debug_get_damage_visualization")
-        {
-            flutter::EncodableValue res(instance->debug_damage);
-            result->Success(res);
-        } else if (method == "is_compositor")
-        {
-            result->Success();
-        } else if (method == "compositor_ready")
-        {
-            wlr_log(WLR_INFO,
-                "Dart compositor ready, sending %d existing outputs",
-                wl_list_length(&instance->outputs));
-            sparrow_send_all_outputs();
-
-            auto o = sparrow_get_first_output();
-            assert(o != nullptr);
-            sparrow_touch *t = nullptr;
-            wl_list_for_each(t, &instance->touchs, link)
-            {
-                map_touch_to_output(t->device, o);
-            }
-            result->Success();
-        } else if (method == "get_socket_paths")
-        {
-            auto map = flutter::EncodableMap{
-                {flutter::EncodableValue("wayland"),
-                    flutter::EncodableValue(instance->wl_socket ?
-                        std::string(instance->wl_socket) :
-                        "")},
-                {flutter::EncodableValue("x"), flutter::EncodableValue("")},
-            };
-            result->Success(flutter::EncodableValue(map));
-        } else if (method == "set_vsync_output")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            if (list && !list->empty())
-            {
-                sparrow_set_vsync_output((uint32_t)enc_get_int((*list)[0]));
-            }
-
-            result->Success();
-        } else if (method == "set_vsync_rate_limit")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            if (list && !list->empty())
-            {
-                sparrow_set_vsync_rate_limit((int)enc_get_int((*list)[0]));
-            }
-
-            result->Success();
-        } else if (method == "set_output_mode")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            bool ok = false;
-            if (list && (list->size() >= 4))
-            {
-                uint32_t output_id = (uint32_t)enc_get_int((*list)[0]);
-                int width   = (int)enc_get_int((*list)[1]);
-                int height  = (int)enc_get_int((*list)[2]);
-                int refresh = (int)enc_get_int((*list)[3]);
-                ok = sparrow_set_output_mode(output_id, width, height, refresh);
-            }
-
-            if (ok)
-            {
-                result->Success();
-            } else
-            {
-                result->Error("error", "Failed to set output mode");
-            }
-        } else if (method == "set_output_position")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            bool ok = false;
-            if (list && (list->size() >= 3))
-            {
-                uint32_t output_id = (uint32_t)enc_get_int((*list)[0]);
-                int x = (int)enc_get_int((*list)[1]);
-                int y = (int)enc_get_int((*list)[2]);
-                ok    = sparrow_set_output_position(output_id, x, y);
-            }
-
-            if (ok)
-            {
-                result->Success();
-            } else
-            {
-                result->Error("error", "Failed to set output position");
-            }
-        } else if (method == "set_output_scale")
-        {
-            const auto *list = std::get_if<flutter::EncodableList>(args);
-            bool ok = false;
-            if (list && (list->size() >= 2))
-            {
-                uint32_t output_id = (uint32_t)enc_get_int((*list)[0]);
-                double scale = enc_get_double((*list)[1], 1.0);
-                ok = sparrow_set_output_scale(output_id, scale);
-            }
-
-            if (ok)
-            {
-                result->Success();
-            } else
-            {
-                result->Error("error", "Failed to set output scale");
-            }
-        } else if (method == "set_primary_output")
-        {
-            result->Success();
-        } else
-        {
-            wlr_log(WLR_INFO, "Unhandled wlroots method: %s", method.c_str());
-            result->NotImplemented();
+            result(std::nullopt);
         }
-    });
 
-    wlr_log(WLR_INFO,
-        "wlroots channel initialized (modern flutter::MethodChannel)");
+        void SetDirectInputMode(
+            int64_t handle,
+            bool enabled,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            Core *core = Core::instance();
+            core->direct_input_mode    = enabled;
+            core->direct_input_surface = (uint32_t)handle;
+            wlr_log(WLR_INFO, "Direct input mode: %s for surface %lu",
+                enabled ? "enabled" : "disabled", (unsigned long)handle);
+            result(std::nullopt);
+        }
+
+        void SetPrimaryOutput(
+            int64_t output_id,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            result(std::nullopt);
+        }
+
+        void SetVsyncOutput(
+            int64_t output_id,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            sparrow_set_vsync_output((uint32_t)output_id);
+            result(true);
+        }
+
+        void SetVsyncRateLimit(
+            int64_t max_hz,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            sparrow_set_vsync_rate_limit((int)max_hz);
+            result(true);
+        }
+
+        void SetOutputMode(
+            int64_t output_id,
+            int64_t width,
+            int64_t height,
+            int64_t refresh,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            bool ok = sparrow_set_output_mode(
+                (uint32_t)output_id, (int)width, (int)height, (int)refresh);
+            result(ok);
+        }
+
+        void SetOutputPosition(
+            int64_t output_id,
+            int64_t x,
+            int64_t y,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            bool ok = sparrow_set_output_position(
+                (uint32_t)output_id, (int)x, (int)y);
+            result(ok);
+        }
+
+        void SetOutputScale(
+            int64_t output_id,
+            double scale,
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            bool ok = sparrow_set_output_scale((uint32_t)output_id, scale);
+            result(ok);
+        }
+
+        void DebugSetDamageVisualization(
+            bool enabled,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            Core *core = Core::instance();
+            core->debug_damage = enabled;
+            wlr_log(WLR_INFO, "Damage visualization: %s",
+                enabled ? "ENABLED" : "DISABLED");
+            sparrow_damage_add_box(nullptr);
+            result(std::nullopt);
+        }
+
+        void DebugGetDamageVisualization(
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            Core *core = Core::instance();
+            result(core->debug_damage);
+        }
+
+        void GetSocketPaths(
+            std::function<void(sparrow::ErrorOr<sparrow::CompositorSocketsData> reply)> result) override
+        {
+            Core *core = Core::instance();
+            sparrow::CompositorSocketsData data(
+                core->wl_socket ? std::string(core->wl_socket) : std::string(""),
+                std::string(""));
+            result(data);
+        }
+
+        void CompositorReady(
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            Core *core = Core::instance();
+            if (core)
+            {
+                wlr_log(WLR_INFO,
+                    "Dart compositor ready (via Pigeon), sending %d existing outputs",
+                    wl_list_length(&core->outputs));
+                sparrow_send_all_outputs();
+
+                auto o = sparrow_get_first_output();
+                if (o != nullptr)
+                {
+                    sparrow_touch *t = nullptr;
+                    wl_list_for_each(t, &core->touchs, link)
+                    {
+                        map_touch_to_output(t->device, o);
+                    }
+                }
+            }
+
+            result(std::nullopt);
+        }
+
+        void IsCompositor(
+            std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+        {
+            result(true);
+        }
+
+        void SurfaceKeyboardKey(
+            int64_t handle,
+            int64_t keycode,
+            int64_t status,
+            int64_t timestamp_micros,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            struct surface_keyboard_key_message msg = {
+                .surface_handle = (uint32_t)handle,
+                .keycode    = (uint64_t)keycode,
+                .event_type = (uint8_t)status,
+                .timestamp  = timestamp_micros,
+            };
+            sparrow_handle_surface_keyboard_key(msg);
+            result(std::nullopt);
+        }
+
+        void SurfacePointerEvent(
+            const ::flutter::EncodableList& data,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            flutter::EncodableValue val(data);
+            struct surface_pointer_event_message msg;
+            if (decode_surface_pointer_event_message(&val, &msg))
+            {
+                sparrow_handle_surface_pointer_event(msg);
+            }
+
+            result(std::nullopt);
+        }
+
+        void PopupPointerEvent(
+            const ::flutter::EncodableList& data,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        {
+            flutter::EncodableValue val(data);
+            struct surface_pointer_event_message msg;
+            if (decode_surface_pointer_event_message(&val, &msg))
+            {
+                sparrow_handle_popup_pointer_event(msg);
+            }
+
+            result(std::nullopt);
+        }
+    };
+
+    instance->pigeon_host_api = std::make_unique<SparrowCompositorHostApi>();
+    sparrow::CompositorHostApi::SetUp(&instance->messenger, instance->pigeon_host_api.get());
+    instance->pigeon_flutter_api =
+        std::make_unique<sparrow::CompositorFlutterApi>(&instance->messenger);
+    wlr_log(WLR_INFO, "Pigeon tweet APIs initialized");
+}
+
+void sparrow_engine_reset_channels()
+{
+    Core *instance = Core::instance();
+    if (!instance)
+    {
+        return;
+    }
+
+    instance->pigeon_host_api.reset();
+    instance->pigeon_flutter_api.reset();
+    wlr_log(WLR_INFO, "Pigeon APIs reset");
 }
 
 void engine_cb_platform_message(const FlutterPlatformMessage *engine_message,
