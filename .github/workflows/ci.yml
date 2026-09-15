@@ -70,7 +70,7 @@ jobs:
       - name: Install Flutter SDK
         run: |
           mkdir -p ~/.local/share
-          curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz | tar -xJ -C ~/.local/share
+          curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.4-stable.tar.xz | tar -xJ -C ~/.local/share
           git config --global --add safe.directory "$HOME/.local/share/flutter"
           "$HOME/.local/share/flutter/bin/flutter" precache --linux
 
