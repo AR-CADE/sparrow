@@ -33,6 +33,7 @@ static gboolean mock_texture_copy_pixels(FlPixelBufferTexture *texture,
 }
 
 static void mock_texture_class_init(MockTextureClass *klass) {
+  (void)mock_texture_parent_class;
   FL_PIXEL_BUFFER_TEXTURE_CLASS(klass)->copy_pixels = mock_texture_copy_pixels;
 }
 
