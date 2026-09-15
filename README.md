@@ -71,7 +71,7 @@ Make sure you have the required development libraries installed:
 - `vulkan(devel)` / `vulkan-headers` / `libvulkan(devel)` (for Vulkan Wayland runner & Impeller backend)
 - Flutter SDK (on `PATH`)
 
-- `wlrctl` and one of the following terminal emulators may be required during the build process:
+- `wlrctl`, `vkcube` and one of the following terminal emulators may be required during the build process:
   - `alacritty` 
   - `foot` 
   - `kitty` 
@@ -158,6 +158,8 @@ In release mode, Sparrow compiles the Flutter Shell with `-Ddart.vm.product=true
 
 ---
 
+*(NOTE: It's recommended to copy the generated artifacts to `[sparrow_src_dir]/flutter/engine/host_release/`)*
+
 ### 2. Profile Mode & Flutter DevTools (Dart VM Service & Profiling)
 In profile mode, Sparrow compiles the Flutter Shell in AOT with `-Ddart.vm.profile=true` and starts the **Dart VM Service** (WebSocket JSON-RPC server) on port `8181`. This enables live widget inspection, memory heap analysis, frame rendering timeline, and CPU profiling via Flutter DevTools.
 
@@ -166,7 +168,7 @@ Because pre-built public embedder binaries from Google exclude the VM service, y
 ```bash
 ./build_engine.sh profile
 ```
-*(The generated artifacts will be placed in `flutter/engine/host_profile/`)*
+*(NOTE: It's recommended to copy the generated artifacts to `[sparrow_src_dir]/flutter/engine/host_profile/`)*
 
 #### Step 2: Build Sparrow in Profile Mode
 Compile Sparrow pointing to the profile engine artifacts:
