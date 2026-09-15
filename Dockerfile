@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libudev-dev \
     hwdata \
     glslang-tools \
+    libvulkan-dev \
     wlrctl \
     weston \
     mesa-utils \

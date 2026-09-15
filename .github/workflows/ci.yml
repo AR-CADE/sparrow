@@ -64,6 +64,7 @@ jobs:
             libxcb-devel xcb-util-devel xcb-util-wm-devel xcb-util-renderutil-devel xcb-util-errors-devel \
             Mesa-libGL1 Mesa-dri glslang-devel liblcms2-devel systemd-devel hwdata \
             wlrctl weston xwayland gtk3-devel \
+            vulkan-devel vulkan-headers \
             curl unzip tar xz which gzip jq
 
       - name: Install Flutter SDK

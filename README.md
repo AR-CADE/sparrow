@@ -68,6 +68,7 @@ Make sure you have the required development libraries installed:
 - `wayland-protocols`, `libwayland(devel)`
 - `libdrm(devel)`, `libinput(devel)`, `libxkbcommon(devel)`, `libpixman(devel)`
 - `libegl(devel)`, `libgles2(devel)`, `libgbm(devel)`, `libdisplay-info(devel)`
+- `vulkan(devel)` / `vulkan-headers` / `libvulkan-dev` (for Vulkan Wayland runner & Impeller backend)
 - Flutter SDK (on `PATH`)
 
 - `wlrctl` and one of the following terminal emulators may be required during the build process:
