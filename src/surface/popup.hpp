@@ -34,7 +34,6 @@ class SparrowPopup
 
     int64_t texture_id = 0;
     bool texture_registered = false;
-    struct wlr_buffer *locked_buffer = nullptr;
     bool unconstrained; // Whether unconstrain has been called
 
     // struct sparrow_cached_texture cache;
@@ -46,10 +45,14 @@ class SparrowPopup
     struct wl_listener reposition;
     struct wl_listener new_subsurface;
     struct wl_listener scene_tree_destroy;
+
+    struct wl_list subsurfaces;
 };
 
 void sparrow_focus_popup(SparrowPopup *popup);
 void sparrow_new_xdg_popup(struct wl_listener *listener, void *data);
 void sparrow_popup_damage_whole(SparrowPopup *popup);
+void sparrow_popup_unconstrain(SparrowPopup *popup);
+void sparrow_popups_update_on_output_change(Output *output);
 
 #endif

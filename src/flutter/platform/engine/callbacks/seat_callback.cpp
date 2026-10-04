@@ -1,14 +1,18 @@
+#include "output.hpp"
+#include "util/handle_map.hpp"
+#include <algorithm>
 #include <core.hpp>
 #include <flutter/platform/cursor.hpp>
 #include <flutter/platform/messages.hpp>
 #include <input/pointer.hpp>
 #include <input/seat.hpp>
 #include <surface/popup.hpp>
+#include <surface/session_lock.hpp>
 #include <surface/view.hpp>
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
-
-void sparrow_handle_surface_pointer_event(const surface_pointer_event_message& message)
+void sparrow_handle_surface_pointer_event(
+    const surface_pointer_event_message & message)
 {
     Core *instance = Core::instance();
 
@@ -190,8 +194,8 @@ void sparrow_handle_surface_pointer_event(const surface_pointer_event_message& m
             {
                 wlr_seat_pointer_notify_enter(instance->seat, surface, local_x,
                     local_y);
-                wlr_seat_pointer_notify_motion(instance->seat, time_msec,
-                    local_x, local_y);
+                wlr_seat_pointer_notify_motion(instance->seat, time_msec, local_x,
+                    local_y);
                 wlr_seat_pointer_notify_frame(instance->seat);
                 wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
                     instance->seat);
@@ -202,8 +206,11 @@ void sparrow_handle_surface_pointer_event(const surface_pointer_event_message& m
         } else if ((message.event_type == pointerDownEvent) ||
                    (message.event_type == pointerUpEvent))
         {
-            wlr_seat_pointer_notify_enter(instance->seat, surface, local_x, local_y);
             sparrow_view_focus(view);
+            wlr_seat_pointer_notify_enter(instance->seat, surface, local_x, local_y);
+            wlr_seat_pointer_notify_motion(instance->seat, time_msec, local_x,
+                local_y);
+            wlr_seat_pointer_notify_frame(instance->seat);
             if (view->scene_tree != nullptr)
             {
                 wlr_scene_node_raise_to_top(&view->scene_tree->node);
@@ -360,7 +367,8 @@ void sparrow_handle_surface_pointer_event(const surface_pointer_event_message& m
     }
 }
 
-void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& message)
+void sparrow_handle_popup_pointer_event(
+    const surface_pointer_event_message & message)
 {
     Core *instance = Core::instance();
 
@@ -420,6 +428,15 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
     {
         // Fallback to popup surface if nothing found at coordinates
         surface = popup_surface;
+    }
+
+    if ((surface != nullptr) && (surface->current.width > 0) &&
+        (surface->current.height > 0))
+    {
+        local_x =
+            std::clamp(local_x, 0.0, static_cast<double>(surface->current.width));
+        local_y =
+            std::clamp(local_y, 0.0, static_cast<double>(surface->current.height));
     }
 
     wlr_log(
@@ -513,7 +530,12 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
         } else if ((message.event_type == pointerHoverEvent) ||
                    (message.event_type == pointerMoveEvent))
         {
-            wlr_seat_pointer_notify_enter(instance->seat, surface, local_x, local_y);
+            if (instance->seat->pointer_state.focused_surface != surface)
+            {
+                wlr_seat_pointer_notify_enter(instance->seat, surface, local_x,
+                    local_y);
+            }
+
             if (!instance->input.motions.empty())
             {
                 for (auto it = instance->input.motions.begin();
@@ -551,8 +573,11 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
         } else if ((message.event_type == pointerDownEvent) ||
                    (message.event_type == pointerUpEvent))
         {
-            wlr_seat_pointer_notify_enter(instance->seat, surface, local_x, local_y);
             sparrow_focus_popup(popup);
+            wlr_seat_pointer_notify_enter(instance->seat, surface, local_x, local_y);
+            wlr_seat_pointer_notify_motion(instance->seat, time_msec, local_x,
+                local_y);
+            wlr_seat_pointer_notify_frame(instance->seat);
             if (popup->scene_tree != nullptr)
             {
                 wlr_scene_node_raise_to_top(&popup->scene_tree->node);
@@ -699,8 +724,14 @@ void sparrow_handle_popup_pointer_event(const surface_pointer_event_message& mes
     }
 }
 
-void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& message)
+void sparrow_handle_surface_keyboard_key(
+    const surface_keyboard_key_message & message)
 {
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *instance = Core::instance();
 
     SparrowView *view = instance->find_view_by_handle(message.surface_handle);
@@ -721,13 +752,15 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
         WL_KEYBOARD_KEY_STATE_PRESSED :
         WL_KEYBOARD_KEY_STATE_RELEASED;
 
-    if ((state == WL_KEYBOARD_KEY_STATE_PRESSED) && keyboard && keyboard->xkb_state)
+    if ((state == WL_KEYBOARD_KEY_STATE_PRESSED) && keyboard &&
+        keyboard->xkb_state)
     {
-        const xkb_keysym_t sym = xkb_state_key_get_one_sym(keyboard->xkb_state,
-            (xkb_keycode_t)message.keycode);
+        const xkb_keysym_t sym = xkb_state_key_get_one_sym(
+            keyboard->xkb_state, (xkb_keycode_t)message.keycode);
         if (sym == XKB_KEY_F8)
         {
-            Output *out = instance->vsync_output ? instance->vsync_output : sparrow_get_first_output();
+            Output *out = instance->vsync_output ? instance->vsync_output :
+                sparrow_get_first_output();
             if (out && out->wlr_output)
             {
                 struct wlr_output_state out_state;
@@ -736,7 +769,8 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
                 wlr_output_state_set_enabled(&out_state, new_enabled);
                 if (!wlr_output_commit_state(out->wlr_output, &out_state))
                 {
-                    wlr_log(WLR_ERROR, "[DPMS] Failed to commit power toggle for output '%s'",
+                    wlr_log(WLR_ERROR,
+                        "[DPMS] Failed to commit power toggle for output '%s'",
                         out->wlr_output->name);
                 } else
                 {
@@ -748,6 +782,8 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
                         sparrow_damage_add_box(nullptr);
                         wlr_output_schedule_frame(out->wlr_output);
                     }
+
+                    sparrow_output_update_dpms_lifecycle();
                 }
 
                 wlr_output_state_finish(&out_state);
@@ -758,11 +794,13 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
 
         if (sym == XKB_KEY_F9)
         {
-            instance->buffering_mode =
-                static_cast<Core::BufferingMode>((static_cast<int>(instance->buffering_mode) + 1) % 3);
-            const char *mode_str = (instance->buffering_mode ==
-                Core::BUFFERING_DOUBLE) ? "DOUBLE BUFFERING (DB)" :
-                (instance->buffering_mode == Core::BUFFERING_AUTO) ? "DYNAMIC TRIPLE BUFFERING (AUTO)" :
+            instance->buffering_mode = static_cast<Core::BufferingMode>(
+                (static_cast<int>(instance->buffering_mode) + 1) % 3);
+            const char *mode_str =
+                (instance->buffering_mode == Core::BUFFERING_DOUBLE) ?
+                "DOUBLE BUFFERING (DB)" :
+                (instance->buffering_mode == Core::BUFFERING_AUTO) ?
+                "DYNAMIC TRIPLE BUFFERING (AUTO)" :
                 "FORCED TRIPLE BUFFERING (TB:ON)";
             wlr_log(WLR_INFO, "[BUFFERING] Mode changed via F9: %s", mode_str);
             sparrow_damage_add_box(nullptr);
@@ -797,13 +835,17 @@ void sparrow_handle_surface_keyboard_key(const surface_keyboard_key_message& mes
         }
     }
 
-    uint32_t keycode = (message.keycode >= 8) ? (message.keycode - 8) : message.keycode;
+    uint32_t keycode =
+        (message.keycode >= 8) ? (message.keycode - 8) : message.keycode;
+#ifdef DEBUG
     wlr_log(WLR_INFO,
-        "[KEY] sparrow_handle_surface_keyboard_key: surface=%u, keycode=%u (evdev=%u), state=%d",
-        message.surface_handle, (uint32_t)message.keycode, keycode, (int)state);
-    wlr_seat_keyboard_notify_key(instance->seat,
-        (uint32_t)(message.timestamp / 1000),
-        keycode, state);
+        "[KEY] sparrow_handle_surface_keyboard_key: surface=%u, keycode=%u "
+        "(evdev=%u), state=%d",
+        message.surface_handle, (uint32_t)message.keycode, keycode,
+        (int)state);
+#endif
+    wlr_seat_keyboard_notify_key(
+        instance->seat, (uint32_t)(message.timestamp / 1000), keycode, state);
 }
 
 void sparrow_handle_surface_begin_move(uint32_t surface_handle)
@@ -823,7 +865,8 @@ void sparrow_handle_surface_begin_move(uint32_t surface_handle)
     }
 }
 
-void sparrow_handle_surface_begin_resize(uint32_t surface_handle, int64_t edges)
+void sparrow_handle_surface_begin_resize(uint32_t surface_handle,
+    int64_t edges)
 {
     (void)edges;
     Core *instance = Core::instance();

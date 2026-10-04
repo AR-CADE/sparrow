@@ -1,24 +1,26 @@
 #include "input_manager.hpp"
-#include "wayland_window.hpp"
 #include "cursor-shape-v1-client-protocol.h"
+#include "wayland_window.hpp"
 
 #include <cstdio>
 #include <cstring>
 #include <linux/input-event-codes.h>
+#include <sparrow/nonstd/wlroots-full.hpp>
 #include <sys/mman.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
-#include <wayland-cursor.h>
 
 // --- Static Wayland Seat Listeners ---
 
-static void seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t capabilities)
+static void seat_handle_capabilities(void *data, struct wl_seat *seat,
+    uint32_t capabilities)
 {
     auto *self = static_cast<InputManager*>(data);
     self->handle_seat_capabilities(seat, capabilities);
 }
 
-static void seat_handle_name(void *data, struct wl_seat *seat, const char *name)
+static void seat_handle_name(void *data, struct wl_seat *seat,
+    const char *name)
 {
     auto *self = static_cast<InputManager*>(data);
     self->handle_seat_name(seat, name);
@@ -31,31 +33,33 @@ static const struct wl_seat_listener seat_listener = {
 
 // --- Pointer Listeners ---
 
-static void pointer_handle_enter(void *data, struct wl_pointer *pointer, uint32_t serial,
-    struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy)
+static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
+    uint32_t serial, struct wl_surface *surface,
+    wl_fixed_t sx, wl_fixed_t sy)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
     self->handle_pointer_enter(serial, surface, sx, sy);
 }
 
-static void pointer_handle_leave(void *data, struct wl_pointer *pointer, uint32_t serial,
-    struct wl_surface *surface)
+static void pointer_handle_leave(void *data, struct wl_pointer *pointer,
+    uint32_t serial, struct wl_surface *surface)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
     self->handle_pointer_leave(serial, surface);
 }
 
-static void pointer_handle_motion(void *data, struct wl_pointer *pointer, uint32_t time, wl_fixed_t sx,
-    wl_fixed_t sy)
+static void pointer_handle_motion(void *data, struct wl_pointer *pointer,
+    uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
     self->handle_pointer_motion(time, sx, sy);
 }
 
-static void pointer_handle_button(void *data, struct wl_pointer *pointer, uint32_t serial, uint32_t time,
+static void pointer_handle_button(void *data, struct wl_pointer *pointer,
+    uint32_t serial, uint32_t time,
     uint32_t button, uint32_t state)
 {
     (void)pointer;
@@ -63,7 +67,8 @@ static void pointer_handle_button(void *data, struct wl_pointer *pointer, uint32
     self->handle_pointer_button(serial, time, button, state);
 }
 
-static void pointer_handle_axis(void *data, struct wl_pointer *pointer, uint32_t time, uint32_t axis,
+static void pointer_handle_axis(void *data, struct wl_pointer *pointer,
+    uint32_t time, uint32_t axis,
     wl_fixed_t value)
 {
     (void)pointer;
@@ -71,22 +76,24 @@ static void pointer_handle_axis(void *data, struct wl_pointer *pointer, uint32_t
     self->handle_pointer_axis(time, axis, value);
 }
 
-static void pointer_handle_axis_source(void *data, struct wl_pointer *pointer, uint32_t axis_source)
+static void pointer_handle_axis_source(void *data, struct wl_pointer *pointer,
+    uint32_t axis_source)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
     self->handle_pointer_axis_source(axis_source);
 }
 
-static void pointer_handle_axis_stop(void *data, struct wl_pointer *pointer, uint32_t time, uint32_t axis)
+static void pointer_handle_axis_stop(void *data, struct wl_pointer *pointer,
+    uint32_t time, uint32_t axis)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
     self->handle_pointer_axis_stop(time, axis);
 }
 
-static void pointer_handle_axis_discrete(void *data, struct wl_pointer *pointer, uint32_t axis,
-    int32_t discrete)
+static void pointer_handle_axis_discrete(void *data, struct wl_pointer *pointer,
+    uint32_t axis, int32_t discrete)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
@@ -100,10 +107,8 @@ static void pointer_handle_frame(void *data, struct wl_pointer *pointer)
     self->handle_pointer_frame();
 }
 
-static void pointer_handle_axis_value120(void *data,
-    struct wl_pointer *pointer,
-    uint32_t axis,
-    int32_t value120)
+static void pointer_handle_axis_value120(void *data, struct wl_pointer *pointer,
+    uint32_t axis, int32_t value120)
 {
     (void)pointer;
     auto *self = static_cast<InputManager*>(data);
@@ -125,47 +130,54 @@ static const struct wl_pointer_listener pointer_listener = {
 
 // --- Keyboard Listeners ---
 
-static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard, uint32_t format, int32_t fd,
-    uint32_t size)
+static void keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
+    uint32_t format, int32_t fd, uint32_t size)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
     self->handle_keyboard_keymap(format, fd, size);
 }
 
-static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-    struct wl_surface *surface, struct wl_array *keys)
+static void keyboard_handle_enter(void *data, struct wl_keyboard *keyboard,
+    uint32_t serial, struct wl_surface *surface,
+    struct wl_array *keys)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
     self->handle_keyboard_enter(serial, surface, keys);
 }
 
-static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-    struct wl_surface *surface)
+static void keyboard_handle_leave(void *data, struct wl_keyboard *keyboard,
+    uint32_t serial, struct wl_surface *surface)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
     self->handle_keyboard_leave(serial, surface);
 }
 
-static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard, uint32_t serial, uint32_t time,
-    uint32_t key, uint32_t state)
+static void keyboard_handle_key(void *data, struct wl_keyboard *keyboard,
+    uint32_t serial, uint32_t time, uint32_t key,
+    uint32_t state)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
     self->handle_keyboard_key(serial, time, key, state);
 }
 
-static void keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard, uint32_t serial,
-    uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
+static void keyboard_handle_modifiers(void *data, struct wl_keyboard *keyboard,
+    uint32_t serial, uint32_t mods_depressed,
+    uint32_t mods_latched,
+    uint32_t mods_locked, uint32_t group)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
-    self->handle_keyboard_modifiers(serial, mods_depressed, mods_latched, mods_locked, group);
+    self->handle_keyboard_modifiers(serial, mods_depressed, mods_latched,
+        mods_locked, group);
 }
 
-static void keyboard_handle_repeat_info(void *data, struct wl_keyboard *keyboard, int32_t rate, int32_t delay)
+static void keyboard_handle_repeat_info(void *data,
+    struct wl_keyboard *keyboard,
+    int32_t rate, int32_t delay)
 {
     (void)keyboard;
     auto *self = static_cast<InputManager*>(data);
@@ -183,22 +195,26 @@ static const struct wl_keyboard_listener keyboard_listener = {
 
 // --- Touch Listeners ---
 
-static void touch_handle_down(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time,
-    struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y)
+static void touch_handle_down(void *data, struct wl_touch *touch,
+    uint32_t serial, uint32_t time,
+    struct wl_surface *surface, int32_t id,
+    wl_fixed_t x, wl_fixed_t y)
 {
     (void)touch;
     auto *self = static_cast<InputManager*>(data);
     self->handle_touch_down(serial, time, surface, id, x, y);
 }
 
-static void touch_handle_up(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time, int32_t id)
+static void touch_handle_up(void *data, struct wl_touch *touch, uint32_t serial,
+    uint32_t time, int32_t id)
 {
     (void)touch;
     auto *self = static_cast<InputManager*>(data);
     self->handle_touch_up(serial, time, id);
 }
 
-static void touch_handle_motion(void *data, struct wl_touch *touch, uint32_t time, int32_t id, wl_fixed_t x,
+static void touch_handle_motion(void *data, struct wl_touch *touch,
+    uint32_t time, int32_t id, wl_fixed_t x,
     wl_fixed_t y)
 {
     (void)touch;
@@ -230,7 +246,7 @@ static const struct wl_touch_listener touch_listener = {
     .orientation = [] (void*, struct wl_touch*, int32_t, wl_fixed_t) {},
 };
 
-static const char * flutter_cursor_to_xcursor(const char *flutter_kind)
+static const char *flutter_cursor_to_xcursor(const char *flutter_kind)
 {
     if (flutter_kind == nullptr)
     {
@@ -247,7 +263,8 @@ static const char * flutter_cursor_to_xcursor(const char *flutter_kind)
         return nullptr;
     }
 
-    if ((strcmp(flutter_kind, "click") == 0) || (strcmp(flutter_kind, "pointer") == 0))
+    if ((strcmp(flutter_kind, "click") == 0) ||
+        (strcmp(flutter_kind, "pointer") == 0))
     {
         return "pointer";
     }
@@ -292,24 +309,28 @@ static const char * flutter_cursor_to_xcursor(const char *flutter_kind)
         return "all-scroll";
     }
 
-    if ((strcmp(flutter_kind, "resizeLeft") == 0) || (strcmp(flutter_kind, "resizeRight") == 0) ||
+    if ((strcmp(flutter_kind, "resizeLeft") == 0) ||
+        (strcmp(flutter_kind, "resizeRight") == 0) ||
         (strcmp(flutter_kind, "resizeLeftRight") == 0))
     {
         return "ew-resize";
     }
 
-    if ((strcmp(flutter_kind, "resizeUp") == 0) || (strcmp(flutter_kind, "resizeDown") == 0) ||
+    if ((strcmp(flutter_kind, "resizeUp") == 0) ||
+        (strcmp(flutter_kind, "resizeDown") == 0) ||
         (strcmp(flutter_kind, "resizeUpDown") == 0))
     {
         return "ns-resize";
     }
 
-    if ((strcmp(flutter_kind, "resizeUpLeft") == 0) || (strcmp(flutter_kind, "resizeDownRight") == 0))
+    if ((strcmp(flutter_kind, "resizeUpLeft") == 0) ||
+        (strcmp(flutter_kind, "resizeDownRight") == 0))
     {
         return "nwse-resize";
     }
 
-    if ((strcmp(flutter_kind, "resizeUpRight") == 0) || (strcmp(flutter_kind, "resizeDownLeft") == 0))
+    if ((strcmp(flutter_kind, "resizeUpRight") == 0) ||
+        (strcmp(flutter_kind, "resizeDownLeft") == 0))
     {
         return "nesw-resize";
     }
@@ -324,7 +345,8 @@ static const char * flutter_cursor_to_xcursor(const char *flutter_kind)
         return "row-resize";
     }
 
-    if ((strcmp(flutter_kind, "notAllowed") == 0) || (strcmp(flutter_kind, "forbidden") == 0))
+    if ((strcmp(flutter_kind, "notAllowed") == 0) ||
+        (strcmp(flutter_kind, "forbidden") == 0))
     {
         return "not-allowed";
     }
@@ -419,12 +441,14 @@ static uint32_t flutter_cursor_to_shape(const std::string & kind)
         return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL;
     }
 
-    if ((kind == "resizeLeft") || (kind == "resizeRight") || (kind == "resizeLeftRight"))
+    if ((kind == "resizeLeft") || (kind == "resizeRight") ||
+        (kind == "resizeLeftRight"))
     {
         return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE;
     }
 
-    if ((kind == "resizeUp") || (kind == "resizeDown") || (kind == "resizeUpDown"))
+    if ((kind == "resizeUp") || (kind == "resizeDown") ||
+        (kind == "resizeUpDown"))
     {
         return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE;
     }
@@ -499,8 +523,7 @@ static uint32_t flutter_cursor_to_shape(const std::string & kind)
 
 // --- InputManager Implementation ---
 
-InputManager::InputManager(WaylandWindow *window) :
-    window_(window)
+InputManager::InputManager(WaylandWindow *window) : window_(window)
 {
     xkb_context_ = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!xkb_context_)
@@ -548,13 +571,12 @@ bool InputManager::init()
         cursor_surface_ = wl_compositor_create_surface(window_->get_compositor());
     }
 
-    repeat_timer_fd_ = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    repeat_timer_fd_ =
+        timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
     if (window_ && (repeat_timer_fd_ >= 0))
     {
-        window_->set_repeat_timer(repeat_timer_fd_, [this] ()
-        {
-            handle_repeat_timer();
-        });
+        window_->set_repeat_timer(repeat_timer_fd_,
+            [this] () { handle_repeat_timer(); });
     }
 
     return true;
@@ -631,7 +653,8 @@ void InputManager::shutdown()
     if (pan_started_ && engine_)
     {
         const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-            window_->get_pixel_ratio() : 1.0;
+            window_->get_pixel_ratio() :
+            1.0;
         uint64_t ts_us = FlutterEngineGetCurrentTime() / 1000ULL;
         FlutterPointerEvent end_ev = {};
         end_ev.struct_size = sizeof(FlutterPointerEvent);
@@ -700,7 +723,8 @@ void InputManager::apply_current_cursor()
     if (window_ && window_->get_cursor_shape_manager())
     {
         struct wp_cursor_shape_device_v1 *device =
-            wp_cursor_shape_manager_v1_get_pointer(window_->get_cursor_shape_manager(), pointer_);
+            wp_cursor_shape_manager_v1_get_pointer(
+                window_->get_cursor_shape_manager(), pointer_);
         if (device)
         {
             uint32_t shape = flutter_cursor_to_shape(current_cursor_kind_);
@@ -712,8 +736,10 @@ void InputManager::apply_current_cursor()
 
     if (cursor_theme_ && cursor_surface_)
     {
-        const char *xcursor_name = flutter_cursor_to_xcursor(current_cursor_kind_.c_str());
-        struct wl_cursor *cursor = wl_cursor_theme_get_cursor(cursor_theme_, xcursor_name);
+        const char *xcursor_name =
+            flutter_cursor_to_xcursor(current_cursor_kind_.c_str());
+        struct wl_cursor *cursor =
+            wl_cursor_theme_get_cursor(cursor_theme_, xcursor_name);
         if (!cursor)
         {
             cursor = wl_cursor_theme_get_cursor(cursor_theme_, "left_ptr");
@@ -733,16 +759,18 @@ void InputManager::apply_current_cursor()
                 wl_surface_attach(cursor_surface_, buf, 0, 0);
                 wl_surface_damage(cursor_surface_, 0, 0, img->width, img->height);
                 wl_surface_commit(cursor_surface_);
-                wl_pointer_set_cursor(pointer_, last_enter_serial_, cursor_surface_, img->hotspot_x,
-                    img->hotspot_y);
+                wl_pointer_set_cursor(pointer_, last_enter_serial_, cursor_surface_,
+                    img->hotspot_x, img->hotspot_y);
             }
         }
     }
 }
 
-void InputManager::handle_seat_capabilities(struct wl_seat *seat, uint32_t capabilities)
+void InputManager::handle_seat_capabilities(struct wl_seat *seat,
+    uint32_t capabilities)
 {
-    printf("[sparrow-app-runner] Seat capabilities: pointer=%d keyboard=%d touch=%d\n",
+    printf("[sparrow-app-runner] Seat capabilities: pointer=%d keyboard=%d "
+           "touch=%d\n",
         (capabilities & WL_SEAT_CAPABILITY_POINTER) ? 1 : 0,
         (capabilities & WL_SEAT_CAPABILITY_KEYBOARD) ? 1 : 0,
         (capabilities & WL_SEAT_CAPABILITY_TOUCH) ? 1 : 0);
@@ -796,7 +824,8 @@ void InputManager::ensure_pointer_added(double x, double y)
     }
 
     const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-        window_->get_pixel_ratio() : 1.0;
+        window_->get_pixel_ratio() :
+        1.0;
 
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(FlutterPointerEvent);
@@ -816,10 +845,8 @@ void InputManager::ensure_pointer_added(double x, double y)
     }
 }
 
-void InputManager::send_pointer_event(FlutterPointerPhase phase,
-    double x,
-    double y,
-    int64_t buttons,
+void InputManager::send_pointer_event(FlutterPointerPhase phase, double x,
+    double y, int64_t buttons,
     FlutterPointerSignalKind signal_kind,
     double scroll_delta_x,
     double scroll_delta_y)
@@ -830,7 +857,8 @@ void InputManager::send_pointer_event(FlutterPointerPhase phase,
     }
 
     const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-        window_->get_pixel_ratio() : 1.0;
+        window_->get_pixel_ratio() :
+        1.0;
 
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(FlutterPointerEvent);
@@ -848,8 +876,9 @@ void InputManager::send_pointer_event(FlutterPointerPhase phase,
     FlutterEngineSendPointerEvent(engine_, &event, 1);
 }
 
-void InputManager::handle_pointer_enter(uint32_t serial, struct wl_surface *surface, wl_fixed_t sx,
-    wl_fixed_t sy)
+void InputManager::handle_pointer_enter(uint32_t serial,
+    struct wl_surface *surface,
+    wl_fixed_t sx, wl_fixed_t sy)
 {
     (void)surface;
     last_enter_serial_ = serial;
@@ -870,7 +899,8 @@ void InputManager::handle_pointer_enter(uint32_t serial, struct wl_surface *surf
     send_pointer_event(kHover, pointer_x_, pointer_y_, pointer_buttons_);
 }
 
-void InputManager::handle_pointer_leave(uint32_t serial, struct wl_surface *surface)
+void InputManager::handle_pointer_leave(uint32_t serial,
+    struct wl_surface *surface)
 {
     (void)serial;
     (void)surface;
@@ -881,7 +911,8 @@ void InputManager::handle_pointer_leave(uint32_t serial, struct wl_surface *surf
     }
 }
 
-void InputManager::handle_pointer_motion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
+void InputManager::handle_pointer_motion(uint32_t time, wl_fixed_t sx,
+    wl_fixed_t sy)
 {
     (void)time;
     pointer_x_ = wl_fixed_to_double(sx);
@@ -892,7 +923,8 @@ void InputManager::handle_pointer_motion(uint32_t time, wl_fixed_t sx, wl_fixed_
     send_pointer_event(phase, pointer_x_, pointer_y_, pointer_buttons_);
 }
 
-void InputManager::handle_pointer_button(uint32_t serial, uint32_t time, uint32_t button, uint32_t state)
+void InputManager::handle_pointer_button(uint32_t serial, uint32_t time,
+    uint32_t button, uint32_t state)
 {
     if (window_)
     {
@@ -943,28 +975,34 @@ void InputManager::handle_pointer_button(uint32_t serial, uint32_t time, uint32_
         phase = (pointer_buttons_ == 0) ? kUp : kMove;
     }
 
-    printf("[sparrow-app-runner] Pointer button: button=0x%x (%s) state=%u phase=%d buttons=0x%lx\n",
-        button, (button == BTN_LEFT) ? "BTN_LEFT" : "OTHER", state, phase, (unsigned long)pointer_buttons_);
+    printf("[sparrow-app-runner] Pointer button: button=0x%x (%s) state=%u "
+           "phase=%d buttons=0x%lx\n",
+        button, (button == BTN_LEFT) ? "BTN_LEFT" : "OTHER", state, phase,
+        (unsigned long)pointer_buttons_);
     fflush(stdout);
 
     send_pointer_event(phase, pointer_x_, pointer_y_, pointer_buttons_);
 }
 
-void InputManager::handle_pointer_axis(uint32_t time, uint32_t axis, wl_fixed_t value)
+void InputManager::handle_pointer_axis(uint32_t time, uint32_t axis,
+    wl_fixed_t value)
 {
-    bool is_touchpad = (current_axis_source_ == WL_POINTER_AXIS_SOURCE_FINGER) ||
+    bool is_touchpad =
+        (current_axis_source_ == WL_POINTER_AXIS_SOURCE_FINGER) ||
         (current_axis_source_ == WL_POINTER_AXIS_SOURCE_CONTINUOUS);
     double delta    = wl_fixed_to_double(value);
     const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-        window_->get_pixel_ratio() : 1.0;
+        window_->get_pixel_ratio() :
+        1.0;
     uint64_t ts_us = (time != 0) ? ((uint64_t)time * 1000ULL) :
         (FlutterEngineGetCurrentTime() / 1000ULL);
 
     if (is_touchpad)
     {
         // Touchpad two-finger pan:
-        // In GTK (fl_scrolling_manager.cc), Wayland delta is scaled by Chromium kScrollOffsetMultiplier
-        // (53.0 / 10.0 = 5.3) and inverted to match natural gesture dragging.
+        // In GTK (fl_scrolling_manager.cc), Wayland delta is scaled by Chromium
+        // kScrollOffsetMultiplier (53.0 / 10.0 = 5.3) and inverted to match natural
+        // gesture dragging.
         const double kTrackpadMultiplier = 5.3;
         double delta_x = 0.0;
         double delta_y = 0.0;
@@ -1044,7 +1082,8 @@ void InputManager::handle_pointer_axis_stop(uint32_t time, uint32_t axis)
     if (pan_started_)
     {
         const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-            window_->get_pixel_ratio() : 1.0;
+            window_->get_pixel_ratio() :
+            1.0;
         uint64_t ts_us = (time != 0) ? ((uint64_t)time * 1000ULL) :
             (FlutterEngineGetCurrentTime() / 1000ULL);
 
@@ -1073,13 +1112,15 @@ void InputManager::handle_pointer_axis_stop(uint32_t time, uint32_t axis)
     }
 }
 
-void InputManager::handle_pointer_axis_discrete(uint32_t axis, int32_t discrete)
+void InputManager::handle_pointer_axis_discrete(uint32_t axis,
+    int32_t discrete)
 {
     (void)axis;
     (void)discrete;
 }
 
-void InputManager::handle_pointer_axis_value120(uint32_t axis, int32_t value120)
+void InputManager::handle_pointer_axis_value120(uint32_t axis,
+    int32_t value120)
 {
     (void)axis;
     (void)value120;
@@ -1091,7 +1132,8 @@ void InputManager::handle_pointer_frame()
 
 // --- Keyboard Handling ---
 
-void InputManager::handle_keyboard_keymap(uint32_t format, int32_t fd, uint32_t size)
+void InputManager::handle_keyboard_keymap(uint32_t format, int32_t fd,
+    uint32_t size)
 {
     if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
     {
@@ -1099,7 +1141,8 @@ void InputManager::handle_keyboard_keymap(uint32_t format, int32_t fd, uint32_t 
         return;
     }
 
-    char *map_str = static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0));
+    char *map_str =
+        static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0));
     if (map_str == MAP_FAILED)
     {
         close(fd);
@@ -1129,7 +1172,8 @@ void InputManager::handle_keyboard_keymap(uint32_t format, int32_t fd, uint32_t 
     }
 
     xkb_keymap_ = xkb_keymap_new_from_string(xkb_context_, map_str,
-        XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        XKB_KEYMAP_FORMAT_TEXT_V1,
+        XKB_KEYMAP_COMPILE_NO_FLAGS);
     munmap(map_str, size);
     close(fd);
 
@@ -1142,7 +1186,9 @@ void InputManager::handle_keyboard_keymap(uint32_t format, int32_t fd, uint32_t 
     xkb_state_ = xkb_state_new(xkb_keymap_);
 }
 
-void InputManager::handle_keyboard_enter(uint32_t serial, struct wl_surface *surface, struct wl_array *keys)
+void InputManager::handle_keyboard_enter(uint32_t serial,
+    struct wl_surface *surface,
+    struct wl_array *keys)
 {
     if (window_)
     {
@@ -1153,14 +1199,16 @@ void InputManager::handle_keyboard_enter(uint32_t serial, struct wl_surface *sur
     (void)keys;
 }
 
-void InputManager::handle_keyboard_leave(uint32_t serial, struct wl_surface *surface)
+void InputManager::handle_keyboard_leave(uint32_t serial,
+    struct wl_surface *surface)
 {
     (void)serial;
     (void)surface;
     stop_repeat();
 }
 
-void InputManager::handle_keyboard_key(uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
+void InputManager::handle_keyboard_key(uint32_t serial, uint32_t time,
+    uint32_t key, uint32_t state)
 {
     if (window_)
     {
@@ -1196,13 +1244,17 @@ void InputManager::handle_keyboard_key(uint32_t serial, uint32_t time, uint32_t 
     }
 }
 
-void InputManager::handle_keyboard_modifiers(uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched,
-    uint32_t mods_locked, uint32_t group)
+void InputManager::handle_keyboard_modifiers(uint32_t serial,
+    uint32_t mods_depressed,
+    uint32_t mods_latched,
+    uint32_t mods_locked,
+    uint32_t group)
 {
     (void)serial;
     if (xkb_state_)
     {
-        xkb_state_update_mask(xkb_state_, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+        xkb_state_update_mask(xkb_state_, mods_depressed, mods_latched, mods_locked,
+            0, 0, group);
     }
 }
 
@@ -1216,7 +1268,8 @@ void InputManager::handle_keyboard_repeat_info(int32_t rate, int32_t delay)
     }
 }
 
-void InputManager::start_repeat(uint32_t keycode, xkb_keysym_t sym, uint32_t unicode)
+void InputManager::start_repeat(uint32_t keycode, xkb_keysym_t sym,
+    uint32_t unicode)
 {
     if ((repeat_rate_ <= 0) || (repeat_delay_ <= 0) || (repeat_timer_fd_ < 0))
     {
@@ -1282,7 +1335,8 @@ void InputManager::handle_repeat_timer()
 
 // --- Touch Handling ---
 
-void InputManager::send_touch_event(FlutterPointerPhase phase, int32_t device_id, double x, double y)
+void InputManager::send_touch_event(FlutterPointerPhase phase,
+    int32_t device_id, double x, double y)
 {
     if (!engine_)
     {
@@ -1290,7 +1344,8 @@ void InputManager::send_touch_event(FlutterPointerPhase phase, int32_t device_id
     }
 
     const double pr = (window_ && (window_->get_pixel_ratio() > 0.0)) ?
-        window_->get_pixel_ratio() : 1.0;
+        window_->get_pixel_ratio() :
+        1.0;
 
     FlutterPointerEvent event = {};
     event.struct_size = sizeof(FlutterPointerEvent);
@@ -1306,7 +1361,8 @@ void InputManager::send_touch_event(FlutterPointerPhase phase, int32_t device_id
     FlutterEngineSendPointerEvent(engine_, &event, 1);
 }
 
-void InputManager::handle_touch_down(uint32_t serial, uint32_t time, struct wl_surface *surface, int32_t id,
+void InputManager::handle_touch_down(uint32_t serial, uint32_t time,
+    struct wl_surface *surface, int32_t id,
     wl_fixed_t x, wl_fixed_t y)
 {
     if (window_)
@@ -1342,7 +1398,8 @@ void InputManager::handle_touch_up(uint32_t serial, uint32_t time, int32_t id)
     send_touch_event(kUp, id, dx, dy);
 }
 
-void InputManager::handle_touch_motion(uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y)
+void InputManager::handle_touch_motion(uint32_t time, int32_t id, wl_fixed_t x,
+    wl_fixed_t y)
 {
     (void)time;
     double dx = wl_fixed_to_double(x);
@@ -1360,7 +1417,7 @@ void InputManager::handle_touch_frame()
 
 void InputManager::handle_touch_cancel()
 {
-    for (const auto & [id, pt] : touch_points_)
+    for (const auto &[id, pt] : touch_points_)
     {
         send_touch_event(kCancel, id, pt.x, pt.y);
     }
@@ -1375,7 +1432,8 @@ bool InputManager::is_ctrl_active() const
         return false;
     }
 
-    return xkb_state_mod_name_is_active(xkb_state_, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
+    return xkb_state_mod_name_is_active(xkb_state_, XKB_MOD_NAME_CTRL,
+        XKB_STATE_MODS_EFFECTIVE) > 0;
 }
 
 bool InputManager::is_shift_active() const
@@ -1385,5 +1443,6 @@ bool InputManager::is_shift_active() const
         return false;
     }
 
-    return xkb_state_mod_name_is_active(xkb_state_, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
+    return xkb_state_mod_name_is_active(xkb_state_, XKB_MOD_NAME_SHIFT,
+        XKB_STATE_MODS_EFFECTIVE) > 0;
 }

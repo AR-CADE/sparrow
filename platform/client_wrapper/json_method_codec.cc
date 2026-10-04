@@ -6,153 +6,136 @@
 
 #include "json_message_codec.h"
 
-namespace flutter {
+namespace flutter
+{
 
-namespace {
+namespace
+{
 
 // Keys used in MethodCall encoding.
-constexpr char kMessageMethodKey[] = "method";
+constexpr char kMessageMethodKey[]    = "method";
 constexpr char kMessageArgumentsKey[] = "args";
 
-// Returns a new document containing only |element|, which must be an element
-// in |document|. This is a move rather than a copy, so it is efficient but
-// destructive to the data in |document|.
-std::unique_ptr<rapidjson::Document> ExtractElement(
-    rapidjson::Document* document,
-    rapidjson::Value* subtree) {
-  auto extracted = std::make_unique<rapidjson::Document>();
-  // Pull the subtree up to the root of the document.
-  document->Swap(*subtree);
-  // Swap the entire document into |extracted|. Unlike the swap above this moves
-  // the allocator ownership, so the data won't be deleted when |document| is
-  // destroyed.
-  extracted->Swap(*document);
-  return extracted;
-}
-
-}  // namespace
+} // namespace
 
 // static
-const JsonMethodCodec& JsonMethodCodec::GetInstance() {
-  static JsonMethodCodec sInstance;
-  return sInstance;
+const JsonMethodCodec& JsonMethodCodec::GetInstance()
+{
+    static JsonMethodCodec sInstance;
+    return sInstance;
 }
 
-std::unique_ptr<MethodCall<rapidjson::Document>>
-JsonMethodCodec::DecodeMethodCallInternal(const uint8_t* message,
-                                          size_t message_size) const {
-  std::unique_ptr<rapidjson::Document> json_message =
-      JsonMessageCodec::GetInstance().DecodeMessage(message, message_size);
-  if (!json_message) {
-    return nullptr;
-  }
+std::unique_ptr<MethodCall<EncodableValue>>
+JsonMethodCodec::DecodeMethodCallInternal(const uint8_t *message,
+    size_t message_size) const
+{
+    std::unique_ptr<EncodableValue> json_message =
+        JsonMessageCodec::GetInstance().DecodeMessage(message, message_size);
+    if (!json_message || !std::holds_alternative<EncodableMap>(*json_message))
+    {
+        return nullptr;
+    }
 
-  auto method_name_iter = json_message->FindMember(kMessageMethodKey);
-  if (method_name_iter == json_message->MemberEnd()) {
-    return nullptr;
-  }
-  if (!method_name_iter->value.IsString()) {
-    return nullptr;
-  }
-  std::string method_name(method_name_iter->value.GetString());
-  auto arguments_iter = json_message->FindMember(kMessageArgumentsKey);
-  std::unique_ptr<rapidjson::Document> arguments;
-  if (arguments_iter != json_message->MemberEnd()) {
-    arguments = ExtractElement(json_message.get(), &(arguments_iter->value));
-  }
-  return std::make_unique<MethodCall<rapidjson::Document>>(
-      method_name, std::move(arguments));
+    const auto& map = std::get<EncodableMap>(*json_message);
+    auto method_it = map.find(EncodableValue(kMessageMethodKey));
+    if (method_it == map.end() || !std::holds_alternative<std::string>(method_it->second))
+    {
+        return nullptr;
+    }
+
+    std::string method_name = std::get<std::string>(method_it->second);
+    auto args_it = map.find(EncodableValue(kMessageArgumentsKey));
+    std::unique_ptr<EncodableValue> arguments;
+    if (args_it != map.end())
+    {
+        arguments = std::make_unique<EncodableValue>(args_it->second);
+    }
+
+    return std::make_unique<MethodCall<EncodableValue>>(
+        method_name, std::move(arguments));
 }
 
 std::unique_ptr<std::vector<uint8_t>> JsonMethodCodec::EncodeMethodCallInternal(
-    const MethodCall<rapidjson::Document>& method_call) const {
-  // TODO: Consider revisiting the codec APIs to avoid the need to copy
-  // everything when doing encoding (e.g., by having a version that takes
-  // owership of the object to encode, so that it can be moved instead).
-  rapidjson::Document message(rapidjson::kObjectType);
-  auto& allocator = message.GetAllocator();
-  rapidjson::Value name(method_call.method_name().c_str(), allocator);
-  rapidjson::Value arguments;
-  if (method_call.arguments()) {
-    arguments.CopyFrom(*method_call.arguments(), allocator);
-  }
-  message.AddMember(kMessageMethodKey, name, allocator);
-  message.AddMember(kMessageArgumentsKey, arguments, allocator);
+    const MethodCall<EncodableValue>& method_call) const
+{
+    EncodableMap message;
+    message[EncodableValue(kMessageMethodKey)] =
+        EncodableValue(method_call.method_name());
 
-  return JsonMessageCodec::GetInstance().EncodeMessage(message);
+    if (method_call.arguments())
+    {
+        message[EncodableValue(kMessageArgumentsKey)] = *method_call.arguments();
+    }
+
+    return JsonMessageCodec::GetInstance().EncodeMessage(EncodableValue(std::move(message)));
 }
 
 std::unique_ptr<std::vector<uint8_t>>
 JsonMethodCodec::EncodeSuccessEnvelopeInternal(
-    const rapidjson::Document* result) const {
-  rapidjson::Document envelope;
-  envelope.SetArray();
-  rapidjson::Value result_value;
-  if (result) {
-    result_value.CopyFrom(*result, envelope.GetAllocator());
-  }
-  envelope.PushBack(result_value, envelope.GetAllocator());
-
-  return JsonMessageCodec::GetInstance().EncodeMessage(envelope);
+    const EncodableValue *result) const
+{
+    EncodableList envelope;
+    envelope.push_back(result ? *result : EncodableValue());
+    return JsonMessageCodec::GetInstance().EncodeMessage(EncodableValue(std::move(envelope)));
 }
 
 std::unique_ptr<std::vector<uint8_t>>
 JsonMethodCodec::EncodeErrorEnvelopeInternal(
     const std::string& error_code,
     const std::string& error_message,
-    const rapidjson::Document* error_details) const {
-  // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
-  rapidjson::Document envelope(rapidjson::kArrayType);
-  auto& allocator = envelope.GetAllocator();
-  envelope.PushBack(rapidjson::Value(error_code.c_str(), allocator), allocator);
-  envelope.PushBack(rapidjson::Value(error_message.c_str(), allocator), allocator);
-  rapidjson::Value details_value;
-  if (error_details) {
-    details_value.CopyFrom(*error_details, allocator);
-  }
-  envelope.PushBack(details_value, allocator);
-
-  return JsonMessageCodec::GetInstance().EncodeMessage(envelope);
+    const EncodableValue *error_details) const
+{
+    EncodableList envelope;
+    envelope.push_back(EncodableValue(error_code));
+    envelope.push_back(EncodableValue(error_message));
+    envelope.push_back(error_details ? *error_details : EncodableValue());
+    return JsonMessageCodec::GetInstance().EncodeMessage(EncodableValue(std::move(envelope)));
 }
 
 bool JsonMethodCodec::DecodeAndProcessResponseEnvelopeInternal(
-    const uint8_t* response,
+    const uint8_t *response,
     size_t response_size,
-    MethodResult<rapidjson::Document>* result) const {
-  std::unique_ptr<rapidjson::Document> json_response =
-      JsonMessageCodec::GetInstance().DecodeMessage(response, response_size);
-  if (!json_response) {
-    return false;
-  }
-  if (!json_response->IsArray()) {
-    return false;
-  }
-  switch (json_response->Size()) {
-    case 1: {
-      std::unique_ptr<rapidjson::Document> value =
-          ExtractElement(json_response.get(), &((*json_response)[0]));
-      if (value->IsNull()) {
-        result->Success();
-      } else {
-        result->Success(*value);
-      }
-      return true;
+    MethodResult<EncodableValue> *result) const
+{
+    std::unique_ptr<EncodableValue> json_response =
+        JsonMessageCodec::GetInstance().DecodeMessage(response, response_size);
+    if (!json_response || !std::holds_alternative<EncodableList>(*json_response))
+    {
+        return false;
     }
-    case 3: {
-      std::string code = (*json_response)[0].GetString();
-      std::string message = (*json_response)[1].GetString();
-      std::unique_ptr<rapidjson::Document> details =
-          ExtractElement(json_response.get(), &((*json_response)[2]));
-      if (details->IsNull()) {
-        result->Error(code, message);
-      } else {
-        result->Error(code, message, *details);
-      }
-      return true;
+
+    const auto& list = std::get<EncodableList>(*json_response);
+    switch (list.size())
+    {
+        case 1:
+        {
+            if (list[0].IsNull())
+            {
+                result->Success();
+            } else
+            {
+                result->Success(list[0]);
+            }
+            return true;
+        }
+        case 3:
+        {
+            std::string code = std::holds_alternative<std::string>(list[0]) ?
+                std::get<std::string>(list[0]) : "";
+            std::string message = std::holds_alternative<std::string>(list[1]) ?
+                std::get<std::string>(list[1]) : "";
+            if (list[2].IsNull())
+            {
+                result->Error(code, message);
+            } else
+            {
+                result->Error(code, message, list[2]);
+            }
+            return true;
+        }
+        default:
+            return false;
     }
-    default:
-      return false;
-  }
 }
 
-}  // namespace flutter
+} // namespace flutter

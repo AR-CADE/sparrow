@@ -35,7 +35,7 @@ namespace fs = std::filesystem;
 #endif
 
 #ifdef RUNNER_HAS_TSAN
-extern "C" const char * __tsan_default_options()
+extern "C" const char *__tsan_default_options()
 {
     return "suppressions=tsan_suppressions.txt";
 }
@@ -43,7 +43,7 @@ extern "C" const char * __tsan_default_options()
 #endif
 
 #ifdef RUNNER_HAS_ASAN
-extern "C" const char * __lsan_default_options()
+extern "C" const char *__lsan_default_options()
 {
     return "suppressions=lsan_suppressions.txt";
 }
@@ -51,7 +51,7 @@ extern "C" const char * __lsan_default_options()
 #endif
 
 #ifdef RUNNER_HAS_UBSAN
-extern "C" const char * __ubsan_default_options()
+extern "C" const char *__ubsan_default_options()
 {
     return "suppressions=ubsan_suppressions.txt";
 }
@@ -69,26 +69,36 @@ static void signal_handler(int sig)
 static void print_usage(const char *prog_name)
 {
     printf("Usage: %s [OPTIONS] [BUNDLE_DIR_OR_ASSETS_PATH]\n\n", prog_name);
-    printf("Minimalist native Wayland application runner and embedder for Flutter\n\n");
+    printf("Minimalist native Wayland application runner and embedder for "
+           "Flutter\n\n");
     printf("Options:\n");
-    printf("  --bundle=<path>         Path to Flutter application bundle directory\n");
+    printf("  --bundle=<path>         Path to Flutter application bundle "
+           "directory\n");
     printf("  --assets-path=<path>    Path to flutter_assets directory\n");
     printf("  --icu-data-path=<path>  Path to icudtl.dat file\n");
-    printf("  --aot-elf-path=<path>   Path to AOT compiled ELF (app.so or libapp.so)\n");
-    printf("  --app-id=<id>           Wayland xdg_toplevel app_id (default: sparrow.flutter.app)\n");
-    printf("  --title=<title>         Window title (default: Flutter Application)\n");
+    printf("  --aot-elf-path=<path>   Path to AOT compiled ELF (app.so or "
+           "libapp.so)\n");
+    printf("  --app-id=<id>           Wayland xdg_toplevel app_id (default: "
+           "sparrow.flutter.app)\n");
+    printf("  --title=<title>         Window title (default: Flutter "
+           "Application)\n");
     printf("  --width=<pixels>        Initial window width (default: 1280)\n");
     printf("  --height=<pixels>       Initial window height (default: 720)\n");
     printf("  --fullscreen            Start in fullscreen mode\n");
     printf("  --maximized             Start maximized\n");
-    printf("  --vulkan                Use native Vulkan renderer instead of OpenGL\n");
-    printf("  --vk-validation         Enable Vulkan Khronos validation layers (implies --vulkan)\n");
-    printf("  --vk-present-mode=<mode> Swapchain present mode: fifo (default), mailbox, immediate\n");
+    printf("  --vulkan                Use native Vulkan renderer instead of "
+           "OpenGL\n");
+    printf("  --vk-validation         Enable Vulkan Khronos validation layers "
+           "(implies --vulkan)\n");
+    printf("  --vk-present-mode=<mode> Swapchain present mode: fifo (default), "
+           "mailbox, immediate\n");
     printf("  -h, --help              Show this help message\n\n");
     printf("Examples:\n");
     printf("  %s out/shell\n", prog_name);
     printf("  %s --bundle=my_app/build/linux/x64/release/bundle\n", prog_name);
-    printf("  %s --assets-path=my_app/flutter_assets --icu-data-path=icudtl.dat\n", prog_name);
+    printf(
+        "  %s --assets-path=my_app/flutter_assets --icu-data-path=icudtl.dat\n",
+        prog_name);
 }
 
 int main(int argc, char *argv[])
@@ -146,7 +156,8 @@ int main(int argc, char *argv[])
             width = static_cast<int>(std::strtol(arg.substr(8).c_str(), nullptr, 10));
         } else if (arg.rfind("--height=", 0) == 0)
         {
-            height = static_cast<int>(std::strtol(arg.substr(9).c_str(), nullptr, 10));
+            height =
+                static_cast<int>(std::strtol(arg.substr(9).c_str(), nullptr, 10));
         } else if (arg == "--fullscreen")
         {
             fullscreen = true;
@@ -180,7 +191,8 @@ int main(int argc, char *argv[])
             use_vulkan = true;
         } else if (arg.rfind("--sparrow-ipc-fd=", 0) == 0)
         {
-            ipc_fd = static_cast<int>(std::strtol(arg.substr(17).c_str(), nullptr, 10));
+            ipc_fd =
+                static_cast<int>(std::strtol(arg.substr(17).c_str(), nullptr, 10));
         } else if (arg.rfind("--", 0) == 0)
         {
             engine_args.push_back(arg);
@@ -198,9 +210,11 @@ int main(int argc, char *argv[])
             if (fs::exists(fs::path(bundle_path) / "flutter_assets"))
             {
                 assets_path = (fs::path(bundle_path) / "flutter_assets").string();
-            } else if (fs::exists(fs::path(bundle_path) / "data" / "flutter_assets"))
+            } else if (fs::exists(fs::path(bundle_path) / "data" /
+                "flutter_assets"))
             {
-                assets_path = (fs::path(bundle_path) / "data" / "flutter_assets").string();
+                assets_path =
+                    (fs::path(bundle_path) / "data" / "flutter_assets").string();
             }
         }
 
@@ -211,7 +225,8 @@ int main(int argc, char *argv[])
                 icu_data_path = (fs::path(bundle_path) / "icudtl.dat").string();
             } else if (fs::exists(fs::path(bundle_path) / "data" / "icudtl.dat"))
             {
-                icu_data_path = (fs::path(bundle_path) / "data" / "icudtl.dat").string();
+                icu_data_path =
+                    (fs::path(bundle_path) / "data" / "icudtl.dat").string();
             }
         }
 
@@ -231,10 +246,8 @@ int main(int argc, char *argv[])
     if (icu_data_path.empty())
     {
         const std::vector<std::string> search_paths = {
-            "out/shell/icudtl.dat",
-            "out/shell/data/icudtl.dat",
-            "/usr/share/flutter/icudtl.dat"
-        };
+            "out/shell/icudtl.dat", "out/shell/data/icudtl.dat",
+            "/usr/share/flutter/icudtl.dat"};
         for (const auto & sp : search_paths)
         {
             if (fs::exists(sp))
@@ -247,7 +260,8 @@ int main(int argc, char *argv[])
 
     if (assets_path.empty())
     {
-        fprintf(stderr, "[sparrow-app-runner] Error: No flutter_assets directory found.\n");
+        fprintf(stderr,
+            "[sparrow-app-runner] Error: No flutter_assets directory found.\n");
         fprintf(stderr, "Please specify a bundle directory or --assets-path.\n\n");
         print_usage(argv[0]);
         return EXIT_FAILURE;
@@ -271,24 +285,29 @@ int main(int argc, char *argv[])
         input_manager.bind_seat(seat);
     };
 
-    if (!window.init(app_id, title, width, height, fullscreen, maximized, !use_vulkan))
+    if (!window.init(app_id, title, width, height, fullscreen, maximized,
+        !use_vulkan))
     {
-        fprintf(stderr, "[sparrow-app-runner] Failed to initialize Wayland window\n");
+        fprintf(stderr,
+            "[sparrow-app-runner] Failed to initialize Wayland window\n");
         return EXIT_FAILURE;
     }
 
     if (!input_manager.init())
     {
-        fprintf(stderr, "[sparrow-app-runner] Failed to initialize input manager\n");
+        fprintf(stderr,
+            "[sparrow-app-runner] Failed to initialize input manager\n");
         return EXIT_FAILURE;
     }
 
     FlutterRunner runner(&window, &input_manager,
-        use_vulkan ? RendererBackend::kVulkan : RendererBackend::kOpenGL,
+        use_vulkan ? RendererBackend::kVulkan :
+        RendererBackend::kOpenGL,
         vk_validation, vk_present_mode);
     if (!runner.init(assets_path, icu_data_path, aot_elf_path, engine_args))
     {
-        fprintf(stderr, "[sparrow-app-runner] Failed to initialize Flutter runner\n");
+        fprintf(stderr,
+            "[sparrow-app-runner] Failed to initialize Flutter runner\n");
         return EXIT_FAILURE;
     }
 
@@ -297,15 +316,13 @@ int main(int argc, char *argv[])
         runner.get_ipc_client()->set_fd(ipc_fd);
     }
 
-    window.on_window_metrics_changed = [&runner] (int32_t w, int32_t h, double pr)
+    window.on_window_metrics_changed = [&runner] (int32_t w, int32_t h,
+                                                  double pr)
     {
         runner.send_window_metrics(w, h, pr);
     };
 
-    window.on_close_requested = [&window] ()
-    {
-        window.request_close();
-    };
+    window.on_close_requested = [&window] () { window.request_close(); };
 
     // Main event loop
     while (window.is_running() && !g_exit_requested)

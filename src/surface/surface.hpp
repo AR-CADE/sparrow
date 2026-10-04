@@ -11,5 +11,6 @@ class SparrowPopup;
 
 void sparrow_new_xdg_toplevel(struct wl_listener *listener, void *data);
 void sparrow_handle_xdg_activation_request_activate(struct wl_listener *listener, void *data);
+void sparrow_notify_redraw_activity(SparrowView *view, pixman_region32_t *damage);
 
 #endif

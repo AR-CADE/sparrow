@@ -1,6 +1,7 @@
 #include "core.hpp"
 #include "output.hpp"
 #include "seat.hpp"
+#include "surface/session_lock.hpp"
 #include "flutter/platform/engine//messages/seat_message.hpp"
 #include <cstring>
 
@@ -10,6 +11,28 @@ void on_server_cursor_touch_down(struct wl_listener *listener,
     const Core *instance = Core::instance();
     struct wlr_touch_down_event *event =
         static_cast<wlr_touch_down_event*>(data);
+
+    if (sparrow_is_session_locked())
+    {
+        double lx = 0.0, ly = 0.0;
+        wlr_cursor_absolute_to_layout_coords(instance->cursor, &event->touch->base,
+            event->x, event->y, &lx, &ly);
+        double sx = 0.0, sy = 0.0;
+        struct wlr_surface *surface = sparrow_session_lock_surface_at(lx, ly, &sx, &sy);
+        if (surface != nullptr)
+        {
+            wlr_seat_touch_notify_down(instance->seat, surface, event->time_msec,
+                event->touch_id, sx, sy);
+            wlr_seat_touch_notify_frame(instance->seat);
+            if (instance->seat->keyboard_state.focused_surface != surface)
+            {
+                sparrow_session_lock_focus_surface(surface);
+            }
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier, instance->seat);
+        return;
+    }
 
     if (instance->engine == nullptr)
     {
@@ -44,6 +67,13 @@ void on_server_cursor_touch_up(struct wl_listener *listener,
     const struct wlr_touch_up_event *event =
         static_cast<wlr_touch_up_event*>(data);
 
+    if (sparrow_is_session_locked())
+    {
+        wlr_seat_touch_notify_up(instance->seat, event->time_msec, event->touch_id);
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier, instance->seat);
+        return;
+    }
+
     if (instance->engine == nullptr)
     {
         return;
@@ -77,6 +107,23 @@ void on_server_cursor_touch_motion(struct wl_listener *listener,
     const Core *instance = Core::instance();
     struct wlr_touch_motion_event *event =
         static_cast<wlr_touch_motion_event*>(data);
+
+    if (sparrow_is_session_locked())
+    {
+        double lx = 0.0, ly = 0.0;
+        wlr_cursor_absolute_to_layout_coords(instance->cursor, &event->touch->base,
+            event->x, event->y, &lx, &ly);
+        double sx = 0.0, sy = 0.0;
+        struct wlr_surface *surface = sparrow_session_lock_surface_at(lx, ly, &sx, &sy);
+        if (surface != nullptr)
+        {
+            wlr_seat_touch_notify_motion(instance->seat, event->time_msec,
+                event->touch_id, sx, sy);
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier, instance->seat);
+        return;
+    }
 
     if (instance->engine == nullptr)
     {
@@ -117,6 +164,19 @@ void on_server_cursor_touch_cancel(struct wl_listener *listener,
     const Core *instance = Core::instance();
     const struct wlr_touch_cancel_event *event =
         static_cast<wlr_touch_cancel_event*>(data);
+
+    if (sparrow_is_session_locked())
+    {
+        struct wlr_touch_point *point =
+            wlr_seat_touch_get_point(instance->seat, event->touch_id);
+        if (point && point->client)
+        {
+            wlr_seat_touch_notify_cancel(instance->seat, point->client);
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier, instance->seat);
+        return;
+    }
 
     if (instance->engine == nullptr)
     {

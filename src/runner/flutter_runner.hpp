@@ -4,20 +4,18 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <pthread.h>
+#include <thread>
 #include <string>
 #include <vector>
 
-#include "flutter_embedder.h"
-#include <vulkan/vulkan.h>
 #include "client_wrapper/binary_messenger.hpp"
 #include "client_wrapper/incoming_message_dispatcher.hpp"
 #include "client_wrapper/method_channel.h"
-#include "client_wrapper/json_method_codec.h"
-#include "client_wrapper/standard_method_codec.h"
+#include "flutter_embedder.h"
+#include <vulkan/vulkan.h>
 
-#include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include <flutter/platform/runner/pigeon/messages.h>
 
@@ -40,14 +38,14 @@ class FlutterRunner
 
   public:
     static FlutterRunner *instance();
-    FlutterRunner(WaylandWindow *window, InputManager *input_manager,
+    FlutterRunner(
+        WaylandWindow *window, InputManager *input_manager,
         RendererBackend backend   = RendererBackend::kOpenGL,
         bool enable_vk_validation = false,
         VkPresentModeKHR preferred_present_mode = VK_PRESENT_MODE_FIFO_KHR);
     ~FlutterRunner();
 
-    bool init(const std::string & assets_path,
-        const std::string & icu_data_path,
+    bool init(const std::string & assets_path, const std::string & icu_data_path,
         const std::string & aot_elf_path = "",
         const std::vector<std::string> & engine_args = {});
 
@@ -60,7 +58,7 @@ class FlutterRunner
         return engine_;
     }
 
-    BinaryMessenger * get_messenger()
+    BinaryMessenger *get_messenger()
     {
         return &messenger_;
     }
@@ -70,16 +68,22 @@ class FlutterRunner
         return window_;
     }
 
-    class IpcClient * get_ipc_client()
+    class IpcClient *get_ipc_client()
     {
         return &ipc_client_;
     }
 
     void on_platform_message(const FlutterPlatformMessage *message);
 
+    void send_lifecycle_state(const char *state_str);
+    void set_window_active(bool active);
+    void set_display_powered(bool powered);
+    void update_lifecycle_state();
+
   private:
     void init_platform_channels();
-    void handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode, bool pressed);
+    void handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
+        bool pressed);
     void send_editing_state();
     void perform_action(const std::string & action);
 
@@ -110,7 +114,8 @@ class FlutterRunner
 
             int32_t start = std::min(selection_base, selection_extent);
             int32_t end   = std::max(selection_base, selection_extent);
-            if ((start >= 0) && (end <= static_cast<int32_t>(text.length())) && (start < end))
+            if ((start >= 0) && (end <= static_cast<int32_t>(text.length())) &&
+                (start < end))
             {
                 text.erase(start, end - start);
                 selection_base = selection_extent = start;
@@ -132,23 +137,30 @@ class FlutterRunner
     BinaryMessenger messenger_;
     std::unique_ptr<IncomingMessageDispatcher> message_dispatcher_;
 
-    std::unique_ptr<flutter::MethodChannel<rapidjson::Document>> platform_channel_;
-    std::unique_ptr<flutter::MethodChannel<rapidjson::Document>> text_input_channel_;
+    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+    platform_channel_;
+    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+    text_input_channel_;
     std::unique_ptr<sparrow::RunnerHostApi> runner_host_api_;
     std::unique_ptr<sparrow::RunnerHostIpcApi> runner_host_ipc_api_;
     std::unique_ptr<sparrow::RunnerFlutterIpcApi> runner_flutter_ipc_api_;
     // std::unique_ptr<sparrow::RunnerFlutterApi> runner_flutter_api;
-    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> mouse_cursor_channel_;
+    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+    mouse_cursor_channel_;
 
     std::mutex task_mutex_;
     std::vector<QueuedTask> queued_tasks_;
     FlutterTaskRunnerDescription platform_task_runner_ = {};
     FlutterCustomTaskRunners custom_task_runners_ = {};
-    pthread_t main_thread_id_ = 0;
+    std::thread::id main_thread_id_ = {};
 
     std::string clipboard_text_;
     TextInputState text_input_state_;
     class IpcClient ipc_client_;
+
+    bool window_active_   = true;
+    bool display_powered_ = true;
+    std::string current_lifecycle_state_ = "AppLifecycleState.resumed";
 };
 
 #endif // FLUTTER_RUNNER_HPP

@@ -285,10 +285,11 @@ bool send_flutter_key_event(uint32_t xkb_keycode, uint32_t sym,
         platform_msg.message     = reinterpret_cast<const uint8_t*>(json_buf);
         platform_msg.message_size    = strlen(json_buf);
         platform_msg.response_handle = nullptr;
-
+#ifdef DEBUG
         FlutterEngineResult res_plat =
-            instance->embedder_api.SendPlatformMessage(instance->engine, &platform_msg);
-
+#endif
+        instance->embedder_api.SendPlatformMessage(instance->engine, &platform_msg);
+#ifdef DEBUG
         wlr_log(WLR_INFO,
             "[KEY] send_flutter_key_event: xkb_keycode=%u, sym=0x%x, physical=0x%" PRIx64 ", logical=0x%"
             PRIx64 ", pressed=%d, mods=0x%x -> res_key=%d, res_plat=%d, json=%s",
@@ -299,6 +300,7 @@ bool send_flutter_key_event(uint32_t xkb_keycode, uint32_t sym,
             "[KEY] send_flutter_key_event: xkb_keycode=%u, sym=0x%x, physical=0x%" PRIx64 ", logical=0x%"
             PRIx64 ", pressed=%d, mods=0x%x -> res_key=%d (no SendPlatformMessage)",
             xkb_keycode, sym, physical, logical, (int)pressed, xkb_mods, (int)res);
+#endif
     }
 
     return res == kSuccess;

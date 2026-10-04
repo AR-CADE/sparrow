@@ -256,11 +256,12 @@ class _ShellState extends State<Shell> with TickerProviderStateMixin {
               target = currentPageIndex + 1;
             }
 
-            await CompositorRepository().platform
-                .surfaceToplevelSetMaximized(surface)
-                .then((_) async {
-                  await CompositorRepository().platform.surfaceFocus(surface);
-                });
+            if (surface.maximized != true) {
+              await CompositorRepository().platform.surfaceToplevelSetMaximized(
+                surface,
+              );
+            }
+            await CompositorRepository().platform.surfaceFocus(surface);
             FocusManager.instance.primaryFocus?.unfocus();
 
             await _updateCurrentPageIndex(target, setstate: true);

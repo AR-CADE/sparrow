@@ -27,4 +27,6 @@ bool engine_cb_renderer_present(void *user_data, const FlutterPresentInfo *prese
 void engine_dispose(FlutterEngine engine, FlutterEngineAOTData aot_data);
 void sparrow_engine_init_channels();
 void sparrow_engine_reset_channels();
+void sparrow_send_lifecycle_state(const char *state_str);
+void sparrow_send_lifecycle_state_dpms(bool display_powered_on);
 #endif

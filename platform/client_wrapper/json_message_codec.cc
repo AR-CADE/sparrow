@@ -6,13 +6,59 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
-#include "rapidjson/error/en.h"
-#include "rapidjson/stringbuffer.h"
-#include "rapidjson/writer.h"
+#include "fast_json_serializer.h"
+#include <simdjson.h>
 
 namespace flutter
 {
+
+namespace
+{
+
+EncodableValue SimdjsonToEncodableValue(const simdjson::dom::element& elem)
+{
+    switch (elem.type())
+    {
+        case simdjson::dom::element_type::NULL_VALUE:
+            return EncodableValue();
+        case simdjson::dom::element_type::BOOL:
+            return EncodableValue(elem.get_bool().value());
+        case simdjson::dom::element_type::INT64:
+            return EncodableValue(elem.get_int64().value());
+        case simdjson::dom::element_type::UINT64:
+            return EncodableValue(static_cast<int64_t>(elem.get_uint64().value()));
+        case simdjson::dom::element_type::DOUBLE:
+            return EncodableValue(elem.get_double().value());
+        case simdjson::dom::element_type::STRING:
+            return EncodableValue(std::string(elem.get_string().value()));
+        case simdjson::dom::element_type::ARRAY:
+        {
+            EncodableList list;
+            for (auto child : elem.get_array())
+            {
+                list.push_back(SimdjsonToEncodableValue(child));
+            }
+            return EncodableValue(std::move(list));
+        }
+        case simdjson::dom::element_type::OBJECT:
+        {
+            EncodableMap map;
+            for (auto field : elem.get_object())
+            {
+                map.emplace(EncodableValue(std::string(field.key)),
+                            SimdjsonToEncodableValue(field.value));
+            }
+            return EncodableValue(std::move(map));
+        }
+        default:
+            return EncodableValue();
+    }
+}
+
+} // namespace
+
 // static
 const JsonMessageCodec& JsonMessageCodec::GetInstance()
 {
@@ -21,34 +67,32 @@ const JsonMessageCodec& JsonMessageCodec::GetInstance()
 }
 
 std::unique_ptr<std::vector<uint8_t>> JsonMessageCodec::EncodeMessageInternal(
-    const rapidjson::Document& message) const
+    const EncodableValue& message) const
 {
-    rapidjson::StringBuffer buffer;
-    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-    // clang-tidy has trouble reasoning about some of the complicated array and
-    // pointer-arithmetic code in rapidjson.
-    // NOLINTNEXTLINE(clang-analyzer-core.*)
-    message.Accept(writer);
-    const char *buffer_start = buffer.GetString();
-    return std::make_unique<std::vector<uint8_t>>(
-        buffer_start, buffer_start + buffer.GetSize());
+    std::string json = FastJsonSerializer::Serialize(message);
+    return std::make_unique<std::vector<uint8_t>>(json.begin(), json.end());
 }
 
-std::unique_ptr<rapidjson::Document> JsonMessageCodec::DecodeMessageInternal(
+std::unique_ptr<EncodableValue> JsonMessageCodec::DecodeMessageInternal(
     const uint8_t *binary_message,
     const size_t message_size) const
 {
-    auto raw_message  = reinterpret_cast<const char*>(binary_message);
-    auto json_message = std::make_unique<rapidjson::Document>();
-    rapidjson::ParseResult result =
-        json_message->Parse(raw_message, message_size);
-    if (result.IsError())
+    if (!binary_message || message_size == 0)
     {
-        std::cerr << "Unable to parse JSON message:\n"
-                  << rapidjson::GetParseError_En(result.Code()) << '\n';
         return nullptr;
     }
 
-    return json_message;
+    thread_local simdjson::dom::parser parser;
+    auto doc_res = parser.parse_unpadded(
+        reinterpret_cast<const char*>(binary_message), message_size);
+    if (doc_res.error())
+    {
+        std::cerr << "Unable to parse JSON message with simdjson: "
+                  << simdjson::error_message(doc_res.error()) << '\n';
+        return nullptr;
+    }
+
+    return std::make_unique<EncodableValue>(SimdjsonToEncodableValue(doc_res.value()));
 }
+
 } // namespace flutter

@@ -68,6 +68,14 @@
 subprojects/perfetto/perfetto.h
 subprojects/perfetto/perfetto.cc
 
+# tools
+tools/bot/repro_clients/jank_monitor
+tools/bot/repro_clients/pointer_calibrator
+tools/bot/repro_clients/repro_subsurface_popup
+tools/bot/repro_clients/repro_tooltip_argb
+tools/bot/repro_clients/sparrow_key
+tools/bot/repro_clients/fixed_size_client
+
 ### Ninja ###
 .ninja_deps
 .ninja_log
@@ -90,3 +98,6 @@ build/**
 /flutter
 *.log
 ROADMAP.md
+build-scudo/
+AGENT.txt
+/engine/

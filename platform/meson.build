@@ -1,5 +1,4 @@
 
-rapidjson_inc  = include_directories('rapidjson/include')
 text_input_inc  = include_directories('text_input')
 platform_inc  = include_directories('.')
 platform_flutter_inc = include_directories('include')
@@ -24,7 +23,7 @@ platform_sources = [
 
 platform_dependencies = [wayland_server, wlroots, xkbcommon, libinput,
                        pixman, drm, egl, glesv2, 
-                       backtrace, xcb,  embedder]
+                       backtrace, xcb, embedder, simdjson_dep]
 
 libplatform_arguments = [
  '-MP' ,
@@ -50,7 +49,7 @@ pigeon_args = libplatform_arguments + ['-Wno-profile-instr-out-of-date', '-Wno-u
 
 pigeon_objs = static_library('pigeon_generated', pigeon_sources,
     dependencies: [platform_dependencies],
-    include_directories: [rapidjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
+    include_directories: [simdjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
     cpp_args: pigeon_args,
     install: false)
 
@@ -58,11 +57,11 @@ pigeon_objs = static_library('pigeon_generated', pigeon_sources,
 # in tests
 libplatform_sta = static_library('libplatform', platform_sources,
     dependencies: [platform_dependencies],
-    include_directories: [rapidjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
+    include_directories: [simdjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
     cpp_args: libplatform_arguments,
     link_with: pigeon_objs,
     install: false)
 
 libplatform = declare_dependency(link_with: libplatform_sta,
-    include_directories: [rapidjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
+    include_directories: [simdjson_inc, platform_inc, platform_flutter_inc, text_input_inc, sparrow_conf_inc, sparrow_api_inc],
     dependencies: platform_dependencies)

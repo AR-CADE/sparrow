@@ -131,6 +131,15 @@ if [ -z "$CLIENT2_BIN" ]; then
         exit 1
     fi
     if [ ! -d "$APP_BUNDLE" ]; then
+        if [ "$APP_BUNDLE" = "$DEFAULT_APP" ] && [ -d "${ROOT_DIR}/examples/simple_app" ]; then
+            echo -e "${YELLOW}[NOTICE] App bundle not found at ${APP_BUNDLE}. Building automatically from examples/simple_app...${NC}"
+            (cd "${ROOT_DIR}/examples/simple_app" && flutter build linux --release)
+            "${ROOT_DIR}/tools/optimize_bundle.sh" \
+                "${ROOT_DIR}/examples/simple_app/build/linux/x64/release/bundle" \
+                "$APP_BUNDLE"
+        fi
+    fi
+    if [ ! -d "$APP_BUNDLE" ]; then
         echo -e "${RED}[ERROR] App bundle not found at ${APP_BUNDLE}.${NC}"
         exit 1
     fi

@@ -7,15 +7,15 @@
 #include <memory>
 #include <string>
 
-#include <rapidjson/document.h>
+#include <simdjson.h>
 
 class IpcClient
 {
   public:
     using ResponseCallback =
-        std::function<void (bool success, const rapidjson::Value & result_or_error)>;
+        std::function<void (bool success, const simdjson::dom::element & result_or_error)>;
     using NotificationCallback =
-        std::function<void (const std::string & method, const rapidjson::Value & params)>;
+        std::function<void (const std::string & method, const simdjson::dom::element & params)>;
 
     IpcClient();
     ~IpcClient();
@@ -34,7 +34,7 @@ class IpcClient
     void close();
 
     void send_request(const std::string & method,
-        const rapidjson::Document & params,
+        const std::string & params_json,
         ResponseCallback callback);
 
     void send_request(const std::string & method,
@@ -62,6 +62,7 @@ class IpcClient
 
     std::map<int64_t, PendingRequest> pending_requests_;
     NotificationCallback on_notification_;
+    simdjson::dom::parser parser_;
 };
 
 #endif // SPARROW_IPC_CLIENT_HPP

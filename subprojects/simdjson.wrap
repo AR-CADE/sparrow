@@ -1,0 +1,5 @@
+[wrap-git]
+url = https://github.com/simdjson/simdjson.git
+revision = a683f0a7596f78576236a88f3bb765c9ca3d368e
+depth = 1
+method = cmake

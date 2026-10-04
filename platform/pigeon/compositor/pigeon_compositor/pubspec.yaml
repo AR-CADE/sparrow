@@ -4,13 +4,13 @@ version: 1.0.0
 # repository: https://github.com/my_org/my_repo
 
 environment:
-  sdk: ^3.13.3
+  sdk: ^3.13.5
 
 # Add regular dependencies here.
 dependencies:
   flutter:
     sdk: flutter
-  pigeon: ^28.1.0
+  pigeon: ^29.0.2
   # path: ^1.9.0
 
 dev_dependencies:

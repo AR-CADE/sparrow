@@ -1,6 +1,8 @@
 #include <EGL/egl.h>
 #include <cassert>
 #include <cstddef>
+#include <cstring>
+#include <mutex>
 #ifdef USE_GLES32
     #include <GLES3/gl32.h>
 #else
@@ -17,17 +19,20 @@
 #include "core.hpp"
 #include "cursor.hpp"
 #include "engine.hpp"
-#include <flutter/platform/pigeon/messages.h>
 #include "engine/callbacks/seat_callback.hpp"
 #include "engine/callbacks/surface_callback.hpp"
 #include "engine/messages/output_message.hpp"
+#include "engine/messages/popup_message.hpp"
 #include "input/pointer.hpp"
+#include "ipc/ipc_server.hpp"
 #include "output.hpp"
 #include "surface/popup.hpp"
 #include "surface/sub_surface.hpp"
 #include "surface/surface.hpp"
 #include "surface/view.hpp"
+#include "util/handle_map.hpp"
 #include "util/udmabuf.hpp"
+#include <flutter/platform/pigeon/messages.h>
 
 void engine_dispose(FlutterEngine engine, FlutterEngineAOTData aot_data)
 {
@@ -86,24 +91,77 @@ void *engine_cb_renderer_gl_proc_resolve(void *user_data, const char *name)
 }
 
 // Helper function to provide texture for a wlr_surface
-// Two paths: DMA-BUF (preferred, zero-copy) or wlroots texture (fallback for
-// SHM)
+static bool is_surface_fully_opaque(struct wlr_surface *surface)
+{
+    if (!surface)
+    {
+        return false;
+    }
+
+    if (surface->buffer && surface->buffer->source)
+    {
+        if (wlr_buffer_is_opaque(surface->buffer->source))
+        {
+            return true;
+        }
+    }
+
+    if ((surface->current.width > 0) && (surface->current.height > 0))
+    {
+        pixman_box32_t box = {
+            .x1 = 0,
+            .y1 = 0,
+            .x2 = surface->current.width,
+            .y2 = surface->current.height,
+        };
+        if (pixman_region32_contains_rectangle(&surface->opaque_region, &box) ==
+            PIXMAN_REGION_IN)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void apply_texture_opacity_swizzle(const FlutterOpenGLTexture *texture,
+    bool is_opaque)
+{
+#ifdef USE_GLES32
+    if (texture && (texture->target == GL_TEXTURE_2D) && (texture->name != 0))
+    {
+        glBindTexture(texture->target, texture->name);
+        glTexParameteri(texture->target, GL_TEXTURE_SWIZZLE_A,
+            is_opaque ? GL_ONE : GL_ALPHA);
+        glBindTexture(texture->target, 0);
+    }
+
+#else
+    (void)texture;
+    (void)is_opaque;
+#endif
+}
+
 //
 // Clean separation: Once buffer type is detected, we use only that path.
 // This avoids overhead from repeatedly trying DMA-BUF for SHM surfaces.
 // Helper to provide texture for Flutter external texture (platform views)
 bool provide_surface_texture(struct wlr_surface *surface,
     size_t requested_width, size_t requested_height,
-    FlutterOpenGLTexture *texture_out)
+    FlutterOpenGLTexture *texture_out,
+    bool force_opaque)
 {
     if (!surface || !texture_out)
     {
         return false;
     }
 
+    const bool opaque = force_opaque || is_surface_fully_opaque(surface);
+
 #ifdef USE_DMABUF
     if (sparrow_renderer_import_surface_dmabuf(surface, texture_out))
     {
+        apply_texture_opacity_swizzle(texture_out, opaque);
         return true;
     }
 
@@ -142,6 +200,8 @@ bool provide_surface_texture(struct wlr_surface *surface,
     texture_out->user_data = nullptr;
     texture_out->destruction_callback = nullptr;
 
+    apply_texture_opacity_swizzle(texture_out, opaque);
+
     return true;
 }
 
@@ -149,13 +209,14 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
     size_t width, size_t height,
     FlutterOpenGLTexture *texture_out)
 {
+    bool result    = false;
     Core *instance = Core::instance();
     if (!instance)
     {
         return false;
     }
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
+    std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.texture_mutex);
 
     // First, try to find a view (toplevel surface)
     if (!wl_list_empty(&instance->views_list))
@@ -214,7 +275,9 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                 if (sparrow_renderer_import_dmabuf_buffer(view->locked_buffer,
                     texture_out))
                 {
-                    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
+                    const bool opaque = is_surface_fully_opaque(
+                        view->xdg_surface ? view->xdg_surface->surface : nullptr);
+                    apply_texture_opacity_swizzle(texture_out, opaque);
                     return true;
                 }
             }
@@ -224,13 +287,12 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                 (view->xdg_surface->surface == nullptr))
             {
                 wlr_log(WLR_DEBUG, "texture_id=%ld: view surface nullptr", texture_id);
-                pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
                 return false;
             }
 
             // Pass Flutter's requested dimensions for resize smoothing
-            bool result = provide_surface_texture(view->xdg_surface->surface, width,
-                height, texture_out);
+            result = provide_surface_texture(view->xdg_surface->surface, width,
+                height, texture_out, false);
             if (!result)
             {
                 wlr_log(WLR_DEBUG,
@@ -238,7 +300,6 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                     texture_id);
             }
 
-            pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
             return result;
         }
     }
@@ -259,7 +320,8 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                 if (sparrow_renderer_import_dmabuf_buffer(sub->locked_buffer,
                     texture_out))
                 {
-                    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
+                    const bool opaque = is_surface_fully_opaque(sub->surface);
+                    apply_texture_opacity_swizzle(texture_out, opaque);
                     return true;
                 }
             }
@@ -267,13 +329,11 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
 #endif
             if (sub->surface == nullptr)
             {
-                pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
                 return false;
             }
 
             // Subsurfaces use actual size (no resize smoothing needed)
-            bool result = provide_surface_texture(sub->surface, 0, 0, texture_out);
-            pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
+            result = provide_surface_texture(sub->surface, 0, 0, texture_out, false);
             return result;
         }
     }
@@ -287,22 +347,13 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
         if (handle_map_get(instance->popups, popup_handle,
             reinterpret_cast<void**>(&popup)))
         {
-#ifdef USE_DMABUF
-            if (popup->locked_buffer != nullptr)
-            {
-                if (sparrow_renderer_import_dmabuf_buffer(popup->locked_buffer,
-                    texture_out))
-                {
-                    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
-                    return true;
-                }
-            }
+            wlr_log(WLR_DEBUG,
+                "[POPUP-EXT-TEX] texture_id=%ld popup=%p (%dx%d)",
+                texture_id, (void*)popup, popup->width, popup->height);
 
-#endif
             if ((popup->xdg_surface == nullptr) ||
                 (popup->xdg_surface->surface == nullptr))
             {
-                pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
                 return false;
             }
 
@@ -337,15 +388,72 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                 content_surface = first_subsurface->surface;
             }
 
-            if (sparrow_surface_get_texture(content_surface) == nullptr)
+            // Primary popup path: wlroots texture with opacity swizzle
             {
-                pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
-                return false;
+                struct wlr_texture *wlr_tex =
+                    sparrow_surface_get_texture(content_surface);
+                if (wlr_tex == nullptr)
+                {
+                    return false;
+                }
+
+                struct wlr_gles2_texture_attribs attribs;
+                wlr_gles2_texture_get_attribs(wlr_tex, &attribs);
+
+                const size_t tex_width = content_surface->current.buffer_width ?
+                    content_surface->current.buffer_width :
+                    content_surface->current.width;
+                const size_t tex_height = content_surface->current.buffer_height ?
+                    content_surface->current.buffer_height :
+                    content_surface->current.height;
+
+                if ((tex_width == 0) || (tex_height == 0))
+                {
+                    return false;
+                }
+
+                texture_out->target = attribs.target;
+                texture_out->name   = attribs.tex;
+#ifdef USE_GLES32
+                texture_out->format = GL_RGBA8;
+#else
+                texture_out->format = GL_RGBA8_OES;
+#endif
+                texture_out->width     = tex_width;
+                texture_out->height    = tex_height;
+                texture_out->user_data = nullptr;
+                texture_out->destruction_callback = nullptr;
+
+                const bool opaque = is_surface_fully_opaque(content_surface);
+                apply_texture_opacity_swizzle(texture_out, opaque);
+
+                result = true;
             }
 
-            // Popups use actual size (no resize smoothing needed)
-            const bool result =
-                provide_surface_texture(content_surface, 0, 0, texture_out);
+            // If content surface dimensions changed and differ from Flutter widget
+            // size, queue a map update to notify Flutter
+            if ((content_surface->current.width > 0) &&
+                (content_surface->current.height > 0) &&
+                ((content_surface->current.width != popup->width) ||
+                 (content_surface->current.height != popup->height)))
+            {
+                instance->callable_queue.enqueue([handle = popup->handle]
+                {
+                    Core *inst = Core::instance();
+                    if (!inst)
+                    {
+                        return;
+                    }
+
+                    SparrowPopup *p = nullptr;
+                    if (handle_map_get(inst->popups, handle,
+                        reinterpret_cast<void**>(&p)) &&
+                        p)
+                    {
+                        send_popup_map(p);
+                    }
+                });
+            }
 
             // Keep requesting updates to catch subsurface content changes
             if (result && popup->texture_registered)
@@ -354,12 +462,10 @@ bool engine_cb_external_texture(void *user_data, int64_t texture_id,
                     instance->engine, popup->texture_id);
             }
 
-            pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
             return result;
         }
     }
 
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
     return false;
 }
 
@@ -402,43 +508,41 @@ void sparrow_engine_init_channels()
     {
       public:
         void SurfaceRequestResize(
-            int64_t handle,
-            int64_t width,
-            int64_t height,
-            int64_t request_id,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            int64_t handle, int64_t width, int64_t height, int64_t request_id,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
-            sparrow_handle_surface_request_resize(
-                (uint32_t)handle, (int)width, (int)height, (uint64_t)request_id);
+            sparrow_handle_surface_request_resize((uint32_t)handle, (int)width,
+                (int)height, (uint64_t)request_id);
             result(std::nullopt);
         }
 
         void SurfaceEndResize(
             int64_t handle,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             sparrow_handle_surface_end_resize((uint32_t)handle);
             result(std::nullopt);
         }
 
         void SurfaceToplevelSetSize(
-            int64_t handle,
-            int64_t width,
-            int64_t height,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            int64_t handle, int64_t width, int64_t height,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
-            sparrow_handle_surface_toplevel_set_size(
-                (uint32_t)handle, (int)width, (int)height);
+            sparrow_handle_surface_toplevel_set_size((uint32_t)handle, (int)width,
+                (int)height);
             result(std::nullopt);
         }
 
         void SurfaceToplevelSetMaximized(
-            int64_t handle,
-            bool maximized,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            int64_t handle, bool maximized,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
-            sparrow_handle_surface_toplevel_set_maximized(
-                (uint32_t)handle, maximized);
+            sparrow_handle_surface_toplevel_set_maximized((uint32_t)handle,
+                maximized);
             result(std::nullopt);
         }
 
@@ -450,16 +554,17 @@ void sparrow_engine_init_channels()
             result(ok);
         }
 
-        void SurfaceFocus(
-            int64_t handle,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+        void SurfaceFocus(int64_t handle,
+            std::function<void(std::optional<sparrow::FlutterError> reply)>
+            result) override
         {
             sparrow_handle_surface_focus((uint32_t)handle);
             result(std::nullopt);
         }
 
         void SurfaceClearFocus(
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             Core *core = Core::instance();
             auto focused_surface = core->seat->keyboard_state.focused_surface;
@@ -468,12 +573,12 @@ void sparrow_engine_init_channels()
                 const struct wlr_xdg_surface *current =
                     wlr_xdg_surface_try_from_wlr_surface(
                         core->seat->keyboard_state.focused_surface);
-                if (current && current->initialized && (current->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+                if (current && current->initialized &&
+                    (current->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
                     current->toplevel)
                 {
                     wlr_xdg_toplevel_set_activated(current->toplevel, false);
-                    SparrowView *curr_view =
-                        static_cast<SparrowView*>(current->data);
+                    SparrowView *curr_view = static_cast<SparrowView*>(current->data);
                     if (curr_view != nullptr)
                     {
                         curr_view->activated = false;
@@ -490,10 +595,9 @@ void sparrow_engine_init_channels()
         }
 
         void SurfaceSetPosition(
-            int64_t handle,
-            int64_t x,
-            int64_t y,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            int64_t handle, int64_t x, int64_t y,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             sparrow_handle_surface_set_position((uint32_t)handle, (int)x, (int)y);
             result(std::nullopt);
@@ -501,9 +605,12 @@ void sparrow_engine_init_channels()
 
         void ForceRenderAllViews(
             bool force,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             Core *core = Core::instance();
+            wlr_log(WLR_INFO, "[OVERVIEW] force_render_all_views set to %s",
+                force ? "TRUE" : "FALSE");
             core->force_render_all_views = force;
             if (core->force_render_all_views)
             {
@@ -512,8 +619,8 @@ void sparrow_engine_init_channels()
                 {
                     if (v->texture_registered)
                     {
-                        core->embedder_api.MarkExternalTextureFrameAvailable(
-                            core->engine, v->texture_id);
+                        core->embedder_api.MarkExternalTextureFrameAvailable(core->engine,
+                            v->texture_id);
                     }
                 }
                 sparrow_damage_add_box(nullptr);
@@ -523,9 +630,9 @@ void sparrow_engine_init_channels()
         }
 
         void SetDirectInputMode(
-            int64_t handle,
-            bool enabled,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            int64_t handle, bool enabled,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             Core *core = Core::instance();
             core->direct_input_mode    = enabled;
@@ -537,7 +644,8 @@ void sparrow_engine_init_channels()
 
         void SetPrimaryOutput(
             int64_t output_id,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             result(std::nullopt);
         }
@@ -559,31 +667,25 @@ void sparrow_engine_init_channels()
         }
 
         void SetOutputMode(
-            int64_t output_id,
-            int64_t width,
-            int64_t height,
-            int64_t refresh,
+            int64_t output_id, int64_t width, int64_t height, int64_t refresh,
             std::function<void(sparrow::ErrorOr<bool> reply)> result) override
         {
-            bool ok = sparrow_set_output_mode(
-                (uint32_t)output_id, (int)width, (int)height, (int)refresh);
+            bool ok = sparrow_set_output_mode((uint32_t)output_id, (int)width,
+                (int)height, (int)refresh);
             result(ok);
         }
 
         void SetOutputPosition(
-            int64_t output_id,
-            int64_t x,
-            int64_t y,
+            int64_t output_id, int64_t x, int64_t y,
             std::function<void(sparrow::ErrorOr<bool> reply)> result) override
         {
-            bool ok = sparrow_set_output_position(
-                (uint32_t)output_id, (int)x, (int)y);
+            bool ok =
+                sparrow_set_output_position((uint32_t)output_id, (int)x, (int)y);
             result(ok);
         }
 
         void SetOutputScale(
-            int64_t output_id,
-            double scale,
+            int64_t output_id, double scale,
             std::function<void(sparrow::ErrorOr<bool> reply)> result) override
         {
             bool ok = sparrow_set_output_scale((uint32_t)output_id, scale);
@@ -592,7 +694,8 @@ void sparrow_engine_init_channels()
 
         void DebugSetDamageVisualization(
             bool enabled,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             Core *core = Core::instance();
             core->debug_damage = enabled;
@@ -609,8 +712,9 @@ void sparrow_engine_init_channels()
             result(core->debug_damage);
         }
 
-        void GetSocketPaths(
-            std::function<void(sparrow::ErrorOr<sparrow::CompositorSocketsData> reply)> result) override
+        void GetSocketPaths(std::function<
+            void(sparrow::ErrorOr<sparrow::CompositorSocketsData> reply)>
+            result) override
         {
             Core *core = Core::instance();
             sparrow::CompositorSocketsData data(
@@ -620,12 +724,14 @@ void sparrow_engine_init_channels()
         }
 
         void CompositorReady(
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             Core *core = Core::instance();
             if (core)
             {
-                wlr_log(WLR_INFO,
+                wlr_log(
+                    WLR_INFO,
                     "Dart compositor ready (via Pigeon), sending %d existing outputs",
                     wl_list_length(&core->outputs));
                 sparrow_send_all_outputs();
@@ -651,11 +757,10 @@ void sparrow_engine_init_channels()
         }
 
         void SurfaceKeyboardKey(
-            int64_t handle,
-            int64_t keycode,
-            int64_t status,
+            int64_t handle, int64_t keycode, int64_t status,
             int64_t timestamp_micros,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             struct surface_keyboard_key_message msg = {
                 .surface_handle = (uint32_t)handle,
@@ -668,8 +773,9 @@ void sparrow_engine_init_channels()
         }
 
         void SurfacePointerEvent(
-            const ::flutter::EncodableList& data,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            const ::flutter::EncodableList & data,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             flutter::EncodableValue val(data);
             struct surface_pointer_event_message msg;
@@ -682,8 +788,9 @@ void sparrow_engine_init_channels()
         }
 
         void PopupPointerEvent(
-            const ::flutter::EncodableList& data,
-            std::function<void(std::optional<sparrow::FlutterError> reply)> result) override
+            const ::flutter::EncodableList & data,
+            std::function<void(std::optional<sparrow::FlutterError> reply)> result)
+        override
         {
             flutter::EncodableValue val(data);
             struct surface_pointer_event_message msg;
@@ -697,7 +804,8 @@ void sparrow_engine_init_channels()
     };
 
     instance->pigeon_host_api = std::make_unique<SparrowCompositorHostApi>();
-    sparrow::CompositorHostApi::SetUp(&instance->messenger, instance->pigeon_host_api.get());
+    sparrow::CompositorHostApi::SetUp(&instance->messenger,
+        instance->pigeon_host_api.get());
     instance->pigeon_flutter_api =
         std::make_unique<sparrow::CompositorFlutterApi>(&instance->messenger);
     wlr_log(WLR_INFO, "Pigeon tweet APIs initialized");
@@ -714,6 +822,51 @@ void sparrow_engine_reset_channels()
     instance->pigeon_host_api.reset();
     instance->pigeon_flutter_api.reset();
     wlr_log(WLR_INFO, "Pigeon APIs reset");
+}
+
+void sparrow_send_lifecycle_state(const char *state_str)
+{
+    Core *instance = Core::instance();
+    if ((instance == nullptr) || (instance->engine == nullptr))
+    {
+        return;
+    }
+
+    wlr_log(WLR_INFO, "[LIFECYCLE] Sent flutter/lifecycle state: %s", state_str);
+    const uint8_t *data   = reinterpret_cast<const uint8_t*>(state_str);
+    const size_t data_len = strlen(state_str);
+    instance->messenger.Send("flutter/lifecycle", data, data_len, nullptr);
+}
+
+void sparrow_send_lifecycle_state_dpms(bool display_powered_on)
+{
+    static bool s_last_powered_on = true;
+    if (s_last_powered_on == display_powered_on)
+    {
+        return;
+    }
+
+    s_last_powered_on = display_powered_on;
+
+    if (!display_powered_on)
+    {
+        sparrow_send_lifecycle_state("AppLifecycleState.inactive");
+        sparrow_send_lifecycle_state("AppLifecycleState.hidden");
+        sparrow_send_lifecycle_state("AppLifecycleState.paused");
+    } else
+    {
+        sparrow_send_lifecycle_state("AppLifecycleState.hidden");
+        sparrow_send_lifecycle_state("AppLifecycleState.inactive");
+        sparrow_send_lifecycle_state("AppLifecycleState.resumed");
+    }
+
+    Core *instance = Core::instance();
+    if (instance && instance->ipc_server)
+    {
+        instance->ipc_server->broadcast_notification(
+            "displayPower", display_powered_on ? "{\"powered_on\": true}" :
+            "{\"powered_on\": false}");
+    }
 }
 
 void engine_cb_platform_message(const FlutterPlatformMessage *engine_message,

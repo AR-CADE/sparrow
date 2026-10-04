@@ -17,6 +17,14 @@ void send_popup_map(SparrowPopup *popup)
     if ((pos_geo.width == 0) || (pos_geo.height == 0))
     {
         pos_geo = popup->xdg_popup->scheduled.geometry;
+    } else if ((popup->xdg_popup->scheduled.geometry.width > 0) &&
+               (popup->xdg_popup->scheduled.geometry.height > 0) &&
+               ((popup->xdg_popup->scheduled.geometry.x != pos_geo.x) ||
+                (popup->xdg_popup->scheduled.geometry.y != pos_geo.y)))
+    {
+        // Scheduled geometry updated by unconstrain - use it immediately
+        pos_geo.x = popup->xdg_popup->scheduled.geometry.x;
+        pos_geo.y = popup->xdg_popup->scheduled.geometry.y;
     }
 
     // Get popup's own window geometry (offset of visible content in buffer)
@@ -32,25 +40,32 @@ void send_popup_map(SparrowPopup *popup)
     struct wlr_surface *content_surface     = surf;
     struct wlr_subsurface *first_subsurface = nullptr;
     struct wlr_subsurface *subsurface = nullptr;
+
     wl_list_for_each(subsurface, &surf->current.subsurfaces_below, current.link)
     {
-        if (subsurface && (subsurface->surface != nullptr) &&
-            subsurface->surface->mapped)
+        if (subsurface && (subsurface->surface != nullptr))
         {
-            first_subsurface = subsurface;
-            break;
-        }
-    }
-    if (first_subsurface == nullptr)
-    {
-        wl_list_for_each(subsurface, &surf->current.subsurfaces_above,
-            current.link)
-        {
-            if (subsurface && (subsurface->surface != nullptr) &&
-                subsurface->surface->mapped)
+            wlr_log(WLR_DEBUG, "  Popup %d sub_below: pos=(%d,%d) size=%dx%d mapped=%d has_buf=%d",
+                popup->handle, subsurface->current.x, subsurface->current.y,
+                subsurface->surface->current.width, subsurface->surface->current.height,
+                subsurface->surface->mapped, wlr_surface_has_buffer(subsurface->surface));
+            if ((first_subsurface == nullptr) && subsurface->surface->mapped)
             {
                 first_subsurface = subsurface;
-                break;
+            }
+        }
+    }
+    wl_list_for_each(subsurface, &surf->current.subsurfaces_above, current.link)
+    {
+        if (subsurface && (subsurface->surface != nullptr))
+        {
+            wlr_log(WLR_DEBUG, "  Popup %d sub_above: pos=(%d,%d) size=%dx%d mapped=%d has_buf=%d",
+                popup->handle, subsurface->current.x, subsurface->current.y,
+                subsurface->surface->current.width, subsurface->surface->current.height,
+                subsurface->surface->mapped, wlr_surface_has_buffer(subsurface->surface));
+            if ((first_subsurface == nullptr) && subsurface->surface->mapped)
+            {
+                first_subsurface = subsurface;
             }
         }
     }
@@ -85,15 +100,18 @@ void send_popup_map(SparrowPopup *popup)
 
     wlr_log(
         WLR_INFO,
-        "Popup map: handle=%d, parent=%d, is_child_popup=%i, pos=(%d,%d), "
-        "size=%dx%d, surface=%dx%d "
-        "(buf_scale=%d), content=%dx%d (buf_scale=%d), output=%s, scale=%.2f",
+        "Popup map: handle=%d, parent_view=%d, is_child=%i (parent_popup=%d), "
+        "flutter_pos=(%d,%d), flutter_size=%dx%d, "
+        "surf=%dx%d (has_buf=%d), content=%dx%d (is_sub=%d), "
+        "win_geo=(%d,%d,%dx%d), pos_geo=(%d,%d,%dx%d)",
         popup->handle, popup->parent_view->handle, popup->parent_popup != nullptr,
-        popup->x, popup->y, popup->width, popup->height, surf->current.width,
-        surf->current.height, surf->current.scale, content_surface->current.width,
-        content_surface->current.height, content_surface->current.scale,
-        popup->current_output ? popup->current_output->wlr_output->name : "none",
-        popup->output_scale);
+        popup->parent_popup ? popup->parent_popup->handle : 0,
+        popup->x, popup->y, popup->width, popup->height,
+        surf->current.width, surf->current.height, wlr_surface_has_buffer(surf),
+        content_surface->current.width, content_surface->current.height,
+        content_surface != surf,
+        win_geo.x, win_geo.y, win_geo.width, win_geo.height,
+        pos_geo.x, pos_geo.y, pos_geo.width, pos_geo.height);
 
     auto map = flutter::EncodableMap{
         {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)popup->handle)},

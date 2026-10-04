@@ -1,8 +1,6 @@
 #ifndef CORE_H
 #define CORE_H
 
-#include "sparrow/options.hpp"
-
 #ifndef SPARROW_VERSION
     #define SPARROW_VERSION ""
 #endif
@@ -11,29 +9,29 @@
 
 #include "client_wrapper/binary_messenger.hpp"
 #include "client_wrapper/incoming_message_dispatcher.hpp"
-#include "client_wrapper/method_channel.h"
-#include "client_wrapper/encodable_value.h"
 #include "flutter/platform/task.hpp"
 #include "input/seat.hpp"
-#include "output.hpp"
 #include "renderer/renderer.hpp"
-#include "util/handle_map.hpp"
 #include "util/rethreading/callable_queue.hpp"
 #include "util/rethreading/debouncer.hpp"
 #include <atomic>
+#include <thread>
 #include <sparrow/nonstd/wlroots-full.hpp>
 
+class Output;
 class SparrowView;
 class SparrowSubSurface;
 class SparrowPopup;
+class SparrowSessionLockSurface;
+struct handle_map;
+struct sparrow_options;
 
 #include <flutter/platform/pigeon/messages.h>
 
 class Core
 {
   private:
-    Core()
-    {}
+    Core();
 
     static std::atomic<Core*> _instance;
     static std::mutex m_;
@@ -43,6 +41,83 @@ class Core
     int init(const sparrow_options & opts, bool allow_root);
     ~Core();
 
+#if 0
+    Core&operator =(const Core & other)
+    {
+        if (this != &other)
+        {
+            wl_display     = other.wl_display;
+            wl_event_loop  = other.wl_event_loop;
+            main_thread_id = other.main_thread_id;
+            backend   = other.backend;
+            session   = other.session;
+            renderer  = other.renderer;
+            allocator = other.allocator;
+            presentation     = other.presentation;
+            last_render_time = other.last_render_time;
+            egl_display    = other.egl_display;
+            egl_context    = other.egl_context;
+            callable_queue = other.callable_queue;
+            debug_damage   = other.debug_damage;
+            show_fps = other.show_fps;
+            debug_protocol = other.debug_protocol;
+            debug_pacing   = other.debug_pacing;
+            buffering_mode = other.buffering_mode;
+            memcpy(&client_commit_timestamps, &other.client_commit_timestamps,
+                MAX_COMMIT_HISTORY * sizeof(uint64_t));
+            client_commit_head  = other.client_commit_head;
+            client_commit_count = other.client_commit_count;
+            fps_decay_timer     = other.fps_decay_timer;
+            callable_queue_event_source = other.callable_queue_event_source;
+            sigint_event_source  = other.sigint_event_source;
+            sigterm_event_source = other.sigterm_event_source;
+            wl_socket = other.wl_socket;
+            xdg_shell = other.xdg_shell;
+            new_xdg_toplevel = other.new_xdg_toplevel;
+            new_xdg_popup    = other.new_xdg_popup;
+            decoration_manager = other.decoration_manager;
+
+            new_toplevel_decoration   = other.new_toplevel_decoration;
+            legacy_decoration_manager = other.legacy_decoration_manager;
+            new_server_decoration     = other.new_server_decoration;
+            foreign_toplevel_manager  = other.foreign_toplevel_manager;
+            ext_foreign_toplevel_list = other.ext_foreign_toplevel_list;
+            subsurfaces = other.subsurfaces;
+            popups     = other.popups;
+            views_list = other.views_list;
+            cursor     = other.cursor;
+            cursor_mgr = other.cursor_mgr;
+            current_xcursor_name = other.current_xcursor_name;
+            flutter_cursor_name  = other.flutter_cursor_name;
+            xcursor_texture = other.xcursor_texture;
+            xcursor_texture_name    = other.xcursor_texture_name;
+            client_cursor_surface   = other.client_cursor_surface;
+            client_cursor_hotspot_x = other.client_cursor_hotspot_x;
+            client_cursor_hotspot_y = other.client_cursor_hotspot_y;
+            cursor_visible = other.cursor_visible;
+            cursor_motion  = other.cursor_motion;
+            cursor_motion_absolute = other.cursor_motion_absolute;
+            cursor_button = other.cursor_button;
+            cursor_axis   = other.cursor_axis;
+            cursor_frame  = other.cursor_frame;
+            cursor_frame  = other.cursor_frame;
+
+            seat = other.seat;
+
+            ipc_server = other.ipc_server;
+        }
+
+        return *this;
+    }
+
+    Core(const Core & other)
+    {
+        wl_display = other.wl_display;
+        ipc_server = other.ipc_server;
+    }
+
+#endif
+
     // View lookup helpers
     SparrowView *find_view_by_handle(uint32_t handle);
     SparrowView *find_view_by_toplevel(const struct wlr_xdg_toplevel *toplevel);
@@ -51,9 +126,9 @@ class Core
 
     struct wl_display *wl_display = nullptr;
     struct wl_event_loop *wl_event_loop = nullptr;
-    pthread_t main_thread_id    = 0;
-    struct wlr_backend *backend = nullptr;
-    struct wlr_session *session = nullptr;
+    std::thread::id main_thread_id  = {};
+    struct wlr_backend *backend     = nullptr;
+    struct wlr_session *session     = nullptr;
     struct wlr_renderer *renderer   = nullptr;
     struct wlr_allocator *allocator = nullptr;
     struct wlr_presentation *presentation = nullptr;
@@ -101,7 +176,8 @@ class Core
             return 0.0;
         }
 
-        int prev_idx = (client_commit_head - 1 + MAX_COMMIT_HISTORY) % MAX_COMMIT_HISTORY;
+        int prev_idx =
+            (client_commit_head - 1 + MAX_COMMIT_HISTORY) % MAX_COMMIT_HISTORY;
         uint64_t last_commit = client_commit_timestamps[prev_idx];
         if ((now_us > last_commit) && ((now_us - last_commit) > 100000ULL))
         {
@@ -200,6 +276,20 @@ class Core
     struct wl_listener request_set_cursor_shape;
     struct wl_listener start_drag;
     struct wlr_idle_notifier_v1 *idle_notifier = nullptr;
+    struct wlr_idle_inhibit_manager_v1 *idle_inhibit_manager = nullptr;
+    struct wl_listener new_idle_inhibitor;
+    struct wl_list idle_inhibitors;
+    uint64_t last_idle_notify_time_us = 0;
+
+    struct wlr_session_lock_manager_v1 *session_lock_manager = nullptr;
+    struct wlr_session_lock_v1 *current_session_lock = nullptr;
+    bool session_locked_sent = false;
+    struct wl_listener new_session_lock;
+    struct wl_listener session_lock_unlock;
+    struct wl_listener session_lock_destroy;
+    struct wl_listener session_lock_new_surface;
+    struct wl_list session_lock_surfaces;
+
     struct wlr_pointer_gestures_v1 *pointer_gestures = nullptr;
     struct wlr_relative_pointer_manager_v1 *relative_pointer_manager = nullptr;
     struct wlr_pointer_constraints_v1 *pointer_constraints = nullptr;
@@ -213,7 +303,8 @@ class Core
     // Direct input mode - bypasses Flutter for low-latency gaming
     bool direct_input_mode = false;
     uint32_t direct_input_surface = 0; // Surface handle for direct input
-    bool gesture_active = false; // Touchpad/touchscreen gesture currently in progress
+    bool gesture_active =
+        false; // Touchpad/touchscreen gesture currently in progress
 
     struct wlr_output_layout *output_layout = nullptr;
     struct wlr_scene *scene = nullptr;

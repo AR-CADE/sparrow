@@ -3,7 +3,6 @@
 #include "client_wrapper/method_channel.h"
 #include "core.hpp"
 
-#include <rapidjson/document.h>
 #include <xkbcommon/xkbcommon.h>
 #include <sparrow/nonstd/wlroots-full.hpp>
 
@@ -41,7 +40,7 @@ struct text_input_state
 };
 
 static struct text_input_state g_text_input = {};
-static std::unique_ptr<flutter::MethodChannel<rapidjson::Document>> g_text_input_channel;
+static std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> g_text_input_channel;
 static std::string g_clipboard_text;
 
 // Repeat timer state
@@ -62,23 +61,21 @@ static void send_editing_state()
         return;
     }
 
-    rapidjson::Document doc;
-    auto& allocator = doc.GetAllocator();
-    doc.SetArray();
+    flutter::EncodableMap state;
+    state[flutter::EncodableValue("text")] = flutter::EncodableValue(g_text_input.text);
+    state[flutter::EncodableValue("selectionBase")]   = flutter::EncodableValue(g_text_input.selection_base);
+    state[flutter::EncodableValue("selectionExtent")] =
+        flutter::EncodableValue(g_text_input.selection_extent);
+    state[flutter::EncodableValue("composingBase")]   = flutter::EncodableValue(g_text_input.composing_base);
+    state[flutter::EncodableValue("composingExtent")] =
+        flutter::EncodableValue(g_text_input.composing_extent);
 
-    doc.PushBack(rapidjson::Value(static_cast<int64_t>(g_text_input.connection_id)), allocator);
-
-    rapidjson::Value state(rapidjson::kObjectType);
-    state.AddMember("text", rapidjson::Value(g_text_input.text.c_str(), allocator), allocator);
-    state.AddMember("selectionBase", g_text_input.selection_base, allocator);
-    state.AddMember("selectionExtent", g_text_input.selection_extent, allocator);
-    state.AddMember("composingBase", g_text_input.composing_base, allocator);
-    state.AddMember("composingExtent", g_text_input.composing_extent, allocator);
-
-    doc.PushBack(state, allocator);
+    flutter::EncodableList list;
+    list.push_back(flutter::EncodableValue(static_cast<int64_t>(g_text_input.connection_id)));
+    list.push_back(flutter::EncodableValue(std::move(state)));
 
     g_text_input_channel->InvokeMethod("TextInputClient.updateEditingState",
-        std::make_unique<rapidjson::Document>(std::move(doc)));
+        std::make_unique<flutter::EncodableValue>(std::move(list)));
 }
 
 static void perform_action(const char *action)
@@ -88,15 +85,12 @@ static void perform_action(const char *action)
         return;
     }
 
-    rapidjson::Document doc;
-    auto& allocator = doc.GetAllocator();
-    doc.SetArray();
-
-    doc.PushBack(rapidjson::Value(static_cast<int64_t>(g_text_input.connection_id)), allocator);
-    doc.PushBack(rapidjson::Value(action, allocator), allocator);
+    flutter::EncodableList list;
+    list.push_back(flutter::EncodableValue(static_cast<int64_t>(g_text_input.connection_id)));
+    list.push_back(flutter::EncodableValue(std::string(action)));
 
     g_text_input_channel->InvokeMethod("TextInputClient.performAction",
-        std::make_unique<rapidjson::Document>(std::move(doc)));
+        std::make_unique<flutter::EncodableValue>(std::move(list)));
 }
 
 static int repeat_timer_callback(void *data)
@@ -199,85 +193,103 @@ void sparrow_text_input_init()
             repeat_timer_callback, nullptr);
     }
 
-    g_text_input_channel = std::make_unique<flutter::MethodChannel<rapidjson::Document>>(
+    g_text_input_channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
         &instance->messenger, "flutter/textinput",
         &flutter::JsonMethodCodec::GetInstance());
 
     g_text_input_channel->SetMethodCallHandler(
-        [] (const flutter::MethodCall<rapidjson::Document>& call,
-            std::unique_ptr<flutter::MethodResult<rapidjson::Document>> result)
+        [] (const flutter::MethodCall<flutter::EncodableValue>& call,
+            std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
     {
         const std::string& method = call.method_name();
-        const rapidjson::Document *args = call.arguments();
+        const flutter::EncodableValue *args = call.arguments();
 
         if (method == "TextInput.setClient")
         {
-            if (args && args->IsArray() && (args->Size() >= 2))
+            if (args && std::holds_alternative<flutter::EncodableList>(*args))
             {
-                const auto& arr     = args->GetArray();
-                g_text_input.active = true;
-                g_text_input.connection_id = arr[0].GetInt64();
-
-                g_text_input.text.clear();
-                g_text_input.selection_base   = 0;
-                g_text_input.selection_extent = 0;
-                g_text_input.composing_base   = -1;
-                g_text_input.composing_extent = -1;
-                g_text_input.multiline    = false;
-                g_text_input.input_action = "TextInputAction.done";
-
-                if (arr[1].IsObject())
+                const auto& arr = std::get<flutter::EncodableList>(*args);
+                if (arr.size() >= 2)
                 {
-                    const auto& config = arr[1].GetObject();
-                    if (config.HasMember("inputAction") && config["inputAction"].IsString())
-                    {
-                        g_text_input.input_action = config["inputAction"].GetString();
-                    }
+                    g_text_input.active = true;
+                    g_text_input.connection_id = arr[0].LongValue();
 
-                    if (config.HasMember("inputType") && config["inputType"].IsObject())
+                    g_text_input.text.clear();
+                    g_text_input.selection_base   = 0;
+                    g_text_input.selection_extent = 0;
+                    g_text_input.composing_base   = -1;
+                    g_text_input.composing_extent = -1;
+                    g_text_input.multiline    = false;
+                    g_text_input.input_action = "TextInputAction.done";
+
+                    if (std::holds_alternative<flutter::EncodableMap>(arr[1]))
                     {
-                        const auto& input_type = config["inputType"].GetObject();
-                        if (input_type.HasMember("name") && input_type["name"].IsString())
+                        const auto& config = std::get<flutter::EncodableMap>(arr[1]);
+                        auto action_it     = config.find(flutter::EncodableValue("inputAction"));
+                        if ((action_it != config.end()) &&
+                            std::holds_alternative<std::string>(action_it->second))
                         {
-                            if (strstr(input_type["name"].GetString(), "multiline"))
+                            g_text_input.input_action = std::get<std::string>(action_it->second);
+                        }
+
+                        auto type_it = config.find(flutter::EncodableValue("inputType"));
+                        if ((type_it != config.end()) &&
+                            std::holds_alternative<flutter::EncodableMap>(type_it->second))
+                        {
+                            const auto& input_type = std::get<flutter::EncodableMap>(type_it->second);
+                            auto name_it = input_type.find(flutter::EncodableValue("name"));
+                            if ((name_it != input_type.end()) &&
+                                std::holds_alternative<std::string>(name_it->second))
                             {
-                                g_text_input.multiline = true;
+                                if (std::get<std::string>(name_it->second).find("multiline") !=
+                                    std::string::npos)
+                                {
+                                    g_text_input.multiline = true;
+                                }
                             }
                         }
                     }
+
+                    sparrow_text_input_stop_repeat(0);
+
+                    Core *inst = Core::instance();
+                    if (inst && inst->seat)
+                    {
+                        wlr_seat_keyboard_clear_focus(inst->seat);
+                    }
+
+                    wlr_log(WLR_INFO, "TextInput.setClient: connection_id=%ld (action=%s, multiline=%d)",
+                        g_text_input.connection_id, g_text_input.input_action.c_str(),
+                        g_text_input.multiline);
                 }
-
-                sparrow_text_input_stop_repeat(0);
-
-                Core *inst = Core::instance();
-                if (inst && inst->seat)
-                {
-                    wlr_seat_keyboard_clear_focus(inst->seat);
-                }
-
-                wlr_log(WLR_INFO, "TextInput.setClient: connection_id=%ld (action=%s, multiline=%d)",
-                    g_text_input.connection_id, g_text_input.input_action.c_str(), g_text_input.multiline);
             }
 
             result->Success();
         } else if (method == "TextInput.setEditingState")
         {
-            if (args && args->IsObject())
+            if (args && std::holds_alternative<flutter::EncodableMap>(*args))
             {
-                const auto& state = args->GetObject();
-                if (state.HasMember("text") && state["text"].IsString())
+                const auto& state = std::get<flutter::EncodableMap>(*args);
+                auto text_it = state.find(flutter::EncodableValue("text"));
+                if ((text_it != state.end()) && std::holds_alternative<std::string>(text_it->second))
                 {
-                    g_text_input.text = state["text"].GetString();
+                    g_text_input.text = std::get<std::string>(text_it->second);
                 }
 
-                if (state.HasMember("selectionBase") && state["selectionBase"].IsInt())
+                auto base_it = state.find(flutter::EncodableValue("selectionBase"));
+                if ((base_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(base_it->second) ||
+                     std::holds_alternative<int64_t>(base_it->second)))
                 {
-                    g_text_input.selection_base = state["selectionBase"].GetInt();
+                    g_text_input.selection_base = static_cast<int32_t>(base_it->second.LongValue());
                 }
 
-                if (state.HasMember("selectionExtent") && state["selectionExtent"].IsInt())
+                auto ext_it = state.find(flutter::EncodableValue("selectionExtent"));
+                if ((ext_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(ext_it->second) ||
+                     std::holds_alternative<int64_t>(ext_it->second)))
                 {
-                    g_text_input.selection_extent = state["selectionExtent"].GetInt();
+                    g_text_input.selection_extent = static_cast<int32_t>(ext_it->second.LongValue());
                 }
 
                 int32_t text_len = static_cast<int32_t>(g_text_input.text.length());
@@ -291,14 +303,20 @@ void sparrow_text_input_init()
                     g_text_input.selection_extent = g_text_input.selection_base;
                 }
 
-                if (state.HasMember("composingBase") && state["composingBase"].IsInt())
+                auto comp_b_it = state.find(flutter::EncodableValue("composingBase"));
+                if ((comp_b_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(comp_b_it->second) ||
+                     std::holds_alternative<int64_t>(comp_b_it->second)))
                 {
-                    g_text_input.composing_base = state["composingBase"].GetInt();
+                    g_text_input.composing_base = static_cast<int32_t>(comp_b_it->second.LongValue());
                 }
 
-                if (state.HasMember("composingExtent") && state["composingExtent"].IsInt())
+                auto comp_e_it = state.find(flutter::EncodableValue("composingExtent"));
+                if ((comp_e_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(comp_e_it->second) ||
+                     std::holds_alternative<int64_t>(comp_e_it->second)))
                 {
-                    g_text_input.composing_extent = state["composingExtent"].GetInt();
+                    g_text_input.composing_extent = static_cast<int32_t>(comp_e_it->second.LongValue());
                 }
             }
 
@@ -337,7 +355,7 @@ void sparrow_text_input_init()
     });
 
     wlr_log(WLR_INFO,
-        "Text input plugin initialized (modern flutter::MethodChannel<rapidjson::Document>)");
+        "Text input plugin initialized (modern flutter::MethodChannel<flutter::EncodableValue>)");
 }
 
 void sparrow_text_input_handle_key(

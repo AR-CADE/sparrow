@@ -21,16 +21,18 @@
 #include "input/keyboard.hpp"
 #include "input/pointer.hpp"
 #include "input/seat.hpp"
+#include "ipc/ipc_server.hpp"
 #include "output.hpp"
 #include "surface/decoration.hpp"
 #include "surface/popup.hpp"
+#include "surface/session_lock.hpp"
 #include "surface/sub_surface.hpp"
 #include "surface/surface.hpp"
 #include "surface/view.hpp"
 #include "util/dispatcher.hpp"
+#include "util/handle_map.hpp"
 #include "util/realtime.hpp"
 #include "util/udmabuf.hpp"
-#include "ipc/ipc_server.hpp"
 #if defined (SPARROW_ENABLE_TRACE)
     #include "util/trace.hpp"
 #endif
@@ -224,17 +226,76 @@ Core*Core::instance()
     return instance;
 }
 
+Core::Core()
+{
+    wl_list_init(&views_list);
+    wl_list_init(&keyboards);
+    wl_list_init(&touchs);
+    wl_list_init(&pointers);
+    wl_list_init(&idle_inhibitors);
+    wl_list_init(&session_lock_surfaces);
+    wl_list_init(&outputs);
+
+    memset(&new_xdg_toplevel, 0, sizeof(new_xdg_toplevel));
+    memset(&new_xdg_popup, 0, sizeof(new_xdg_popup));
+    memset(&new_toplevel_decoration, 0, sizeof(new_toplevel_decoration));
+    memset(&new_server_decoration, 0, sizeof(new_server_decoration));
+    memset(&client_cursor_destroy, 0, sizeof(client_cursor_destroy));
+    memset(&cursor_motion, 0, sizeof(cursor_motion));
+    memset(&cursor_motion_absolute, 0, sizeof(cursor_motion_absolute));
+    memset(&cursor_button, 0, sizeof(cursor_button));
+    memset(&cursor_axis, 0, sizeof(cursor_axis));
+    memset(&cursor_frame, 0, sizeof(cursor_frame));
+    memset(&swipe_begin, 0, sizeof(swipe_begin));
+    memset(&swipe_update, 0, sizeof(swipe_update));
+    memset(&swipe_end, 0, sizeof(swipe_end));
+    memset(&pinch_begin, 0, sizeof(pinch_begin));
+    memset(&pinch_update, 0, sizeof(pinch_update));
+    memset(&pinch_end, 0, sizeof(pinch_end));
+    memset(&hold_begin, 0, sizeof(hold_begin));
+    memset(&hold_end, 0, sizeof(hold_end));
+    memset(&cursor_touch_down, 0, sizeof(cursor_touch_down));
+    memset(&cursor_touch_up, 0, sizeof(cursor_touch_up));
+    memset(&cursor_touch_motion, 0, sizeof(cursor_touch_motion));
+    memset(&cursor_touch_frame, 0, sizeof(cursor_touch_frame));
+    memset(&cursor_touch_cancel, 0, sizeof(cursor_touch_cancel));
+    memset(&request_cursor, 0, sizeof(request_cursor));
+    memset(&new_virtual_keyboard, 0, sizeof(new_virtual_keyboard));
+    memset(&new_virtual_pointer, 0, sizeof(new_virtual_pointer));
+    memset(&new_input, 0, sizeof(new_input));
+    memset(&request_set_selection, 0, sizeof(request_set_selection));
+    memset(&request_set_primary_selection, 0, sizeof(request_set_primary_selection));
+    memset(&request_set_cursor_shape, 0, sizeof(request_set_cursor_shape));
+    memset(&start_drag, 0, sizeof(start_drag));
+    memset(&new_idle_inhibitor, 0, sizeof(new_idle_inhibitor));
+    memset(&new_session_lock, 0, sizeof(new_session_lock));
+    memset(&session_lock_unlock, 0, sizeof(session_lock_unlock));
+    memset(&session_lock_destroy, 0, sizeof(session_lock_destroy));
+    memset(&session_lock_new_surface, 0, sizeof(session_lock_new_surface));
+    memset(&new_pointer_constraint, 0, sizeof(new_pointer_constraint));
+    memset(&xdg_activation_request_activate, 0, sizeof(xdg_activation_request_activate));
+    memset(&new_output, 0, sizeof(new_output));
+    memset(&output_manager_apply, 0, sizeof(output_manager_apply));
+    memset(&output_manager_test, 0, sizeof(output_manager_test));
+    memset(&output_power_manager_set_mode, 0, sizeof(output_power_manager_set_mode));
+}
+
 Core::~Core()
 {
     wlr_log(WLR_INFO, "destroy core:%d", _instance != nullptr);
+    _instance.store(nullptr, std::memory_order_release);
 
     if (xdg_activation_request_activate.link.next &&
         xdg_activation_request_activate.link.prev &&
-        (xdg_activation_request_activate.link.next != &xdg_activation_request_activate.link))
+        (xdg_activation_request_activate.link.next !=
+         &xdg_activation_request_activate.link))
     {
         wl_list_remove(&xdg_activation_request_activate.link);
         wl_list_init(&xdg_activation_request_activate.link);
     }
+
+    sparrow_session_lock_finish(this);
+    sparrow_idle_inhibit_finish(this);
 
     if (subsurfaces)
     {
@@ -359,8 +420,8 @@ SparrowView*Core::find_view_by_xdg_surface(const struct wlr_xdg_surface *xdg_sur
 
 void Core::dump_surface_tree() const
 {
-    fprintf(stderr,
-        "\n\033[1;36m======================= SPARROW SURFACE TREE =======================\033[0m\n");
+    fprintf(stderr, "\n\033[1;36m======================= SPARROW SURFACE TREE "
+                    "=======================\033[0m\n");
 
     // Outputs
     Output *out = nullptr;
@@ -371,7 +432,9 @@ void Core::dump_surface_tree() const
             continue;
         }
 
-        int refresh = out->wlr_output->current_mode ? (out->wlr_output->current_mode->refresh / 1000) : 60;
+        int refresh = out->wlr_output->current_mode ?
+            (out->wlr_output->current_mode->refresh / 1000) :
+            60;
         struct wlr_box out_box = {0, 0, 0, 0};
         if (output_layout)
         {
@@ -379,11 +442,11 @@ void Core::dump_surface_tree() const
         }
 
         fprintf(stderr,
-            "\033[1;32m[Output]\033[0m %s (id=%d) [%dx%d @ %dHz] Scale: %.2f | Pos: (%d, %d) | %s\n",
-            out->wlr_output->name, out->id,
-            out->wlr_output->width, out->wlr_output->height, refresh,
-            out->wlr_output->scale, out_box.x, out_box.y,
-            (out == vsync_output) ? "VSync Primary" : "Secondary");
+            "\033[1;32m[Output]\033[0m %s (id=%d) [%dx%d @ %dHz] Scale: %.2f | "
+            "Pos: (%d, %d) | %s\n",
+            out->wlr_output->name, out->id, out->wlr_output->width,
+            out->wlr_output->height, refresh, out->wlr_output->scale, out_box.x,
+            out_box.y, (out == vsync_output) ? "VSync Primary" : "Secondary");
     }
 
     // Views / Toplevels
@@ -397,7 +460,8 @@ void Core::dump_surface_tree() const
         gid_t gid = 0;
         if (view->xdg_surface && view->xdg_surface->resource)
         {
-            struct wl_client *client = wl_resource_get_client(view->xdg_surface->resource);
+            struct wl_client *client =
+                wl_resource_get_client(view->xdg_surface->resource);
             if (client)
             {
                 wl_client_get_credentials(client, &pid, &uid, &gid);
@@ -421,19 +485,25 @@ void Core::dump_surface_tree() const
             buf_h = view->xdg_surface->surface->current.buffer_height;
             if (view->xdg_surface->surface->buffer)
             {
-                buffer_type =
-                    view->xdg_surface->surface->buffer->texture ? "Hardware/Texture" : "ClientBuffer";
+                buffer_type = view->xdg_surface->surface->buffer->texture ?
+                    "Hardware/Texture" :
+                    "ClientBuffer";
             }
         }
 
-        fprintf(stderr, " \033[1;34m├─ [View #%d]\033[0m PID: %d | App: \"%s\" | Title: \"%s\"\n",
+        fprintf(stderr,
+            " \033[1;34m├─ [View #%d]\033[0m PID: %d | App: \"%s\" | Title: "
+            "\"%s\"\n",
             view->handle, pid, app_id, title);
-        fprintf(stderr, " │  ├─ Geometry: %dx%d @ (%d, %d) | Buffer: %s (%dx%d) | Focused: %s | Mapped: %s\n",
-            view->width, view->height, view->x, view->y,
-            buffer_type, buf_w, buf_h,
-            view->activated ? "YES" : "NO",
+        fprintf(stderr,
+            " │  ├─ Geometry: %dx%d @ (%d, %d) | Buffer: %s (%dx%d) | Focused: "
+            "%s | Mapped: %s\n",
+            view->width, view->height, view->x, view->y, buffer_type, buf_w,
+            buf_h, view->activated ? "YES" : "NO",
             (view->xdg_surface && view->xdg_surface->surface &&
-                view->xdg_surface->surface->mapped) ? "YES" : "NO");
+                view->xdg_surface->surface->mapped) ?
+            "YES" :
+            "NO");
 
         // Subsurfaces of this view
         if (subsurfaces)
@@ -447,13 +517,16 @@ void Core::dump_surface_tree() const
                     const char *sub_buf_type = "None";
                     if (sub->surface && sub->surface->buffer)
                     {
-                        sub_buf_type = sub->surface->buffer->texture ? "Hardware/Texture" : "ClientBuffer";
+                        sub_buf_type = sub->surface->buffer->texture ? "Hardware/Texture" :
+                            "ClientBuffer";
                     }
 
                     fprintf(stderr,
-                        " │  ├─ \033[1;33m[Sub #%d]\033[0m %dx%d @ (%d, %d) | Buffer: %s (%dx%d) | TexID: %ld\n",
+                        " │  ├─ \033[1;33m[Sub #%d]\033[0m %dx%d @ (%d, %d) | "
+                        "Buffer: %s (%dx%d) | TexID: %ld\n",
                         sub->handle, sub->width, sub->height, sub->x, sub->y,
-                        sub_buf_type, sub->buffer_width, sub->buffer_height, sub->texture_id);
+                        sub_buf_type, sub->buffer_width, sub->buffer_height,
+                        sub->texture_id);
                 }
             });
         }
@@ -468,10 +541,13 @@ void Core::dump_surface_tree() const
                 if (pop && (pop->parent_view == view))
                 {
                     fprintf(stderr,
-                        " │  └─ \033[1;35m[Popup #%d]\033[0m %dx%d @ (%d, %d) | Mapped: %s | Unconstrained: %s\n",
+                        " │  └─ \033[1;35m[Popup #%d]\033[0m %dx%d @ (%d, %d) | "
+                        "Mapped: %s | Unconstrained: %s\n",
                         pop->handle, pop->width, pop->height, pop->x, pop->y,
                         (pop->xdg_surface && pop->xdg_surface->surface &&
-                            pop->xdg_surface->surface->mapped) ? "YES" : "NO",
+                            pop->xdg_surface->surface->mapped) ?
+                        "YES" :
+                        "NO",
                         pop->unconstrained ? "YES" : "NO");
                 }
             });
@@ -483,8 +559,8 @@ void Core::dump_surface_tree() const
         fprintf(stderr, " \033[0;90m(No active toplevel views)\033[0m\n");
     }
 
-    fprintf(stderr,
-        "\033[1;36m====================================================================\033[0m\n\n");
+    fprintf(stderr, "\033[1;36m=================================================="
+                    "==================\033[0m\n\n");
 }
 
 int Core::init(const sparrow_options & opts, bool allow_root)
@@ -522,15 +598,18 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     const char *buffering_env = getenv("SPARROW_BUFFERING");
     if (buffering_env != nullptr)
     {
-        if ((strcasecmp(buffering_env, "double") == 0) || (strcmp(buffering_env, "0") == 0))
+        if ((strcasecmp(buffering_env, "double") == 0) ||
+            (strcmp(buffering_env, "0") == 0))
         {
             core->buffering_mode = Core::BUFFERING_DOUBLE;
-        } else if ((strcasecmp(buffering_env, "triple") == 0) || (strcmp(buffering_env,
-            "2") == 0) || (strcasecmp(buffering_env, "on") == 0))
+        } else if ((strcasecmp(buffering_env, "triple") == 0) ||
+                   (strcmp(buffering_env, "2") == 0) ||
+                   (strcasecmp(buffering_env, "on") == 0))
         {
             core->buffering_mode = Core::BUFFERING_TRIPLE;
-        } else if ((strcasecmp(buffering_env, "auto") == 0) || (strcmp(buffering_env,
-            "1") == 0) || (strcasecmp(buffering_env, "dynamic") == 0))
+        } else if ((strcasecmp(buffering_env, "auto") == 0) ||
+                   (strcmp(buffering_env, "1") == 0) ||
+                   (strcasecmp(buffering_env, "dynamic") == 0))
         {
             core->buffering_mode = Core::BUFFERING_AUTO;
         }
@@ -543,12 +622,13 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     }
 
     wlr_log_init(log_level, nullptr);
-    core->main_thread_id = pthread_self();
+    core->main_thread_id = std::this_thread::get_id();
 
     wlr_log(WLR_INFO, "Starting sparrow: %s", get_version_string().c_str());
-    const char *buf_mode_name = (core->buffering_mode ==
-        Core::BUFFERING_DOUBLE) ? "DOUBLE BUFFERING (DB)" :
-        (core->buffering_mode == Core::BUFFERING_AUTO) ? "DYNAMIC TRIPLE BUFFERING (AUTO)" :
+    const char *buf_mode_name = (core->buffering_mode == Core::BUFFERING_DOUBLE) ?
+        "DOUBLE BUFFERING (DB)" :
+        (core->buffering_mode == Core::BUFFERING_AUTO) ?
+        "DYNAMIC TRIPLE BUFFERING (AUTO)" :
         "FORCED TRIPLE BUFFERING (TB:ON)";
     wlr_log(WLR_INFO, "Buffering mode: %s", buf_mode_name);
     if (core->debug_damage)
@@ -607,8 +687,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     wl_display_set_default_max_buffer_size(core->wl_display, 1024UL * 1024UL);
 
-    core->backend =
-        wlr_backend_autocreate(core->wl_event_loop, &core->session);
+    core->backend = wlr_backend_autocreate(core->wl_event_loop, &core->session);
     if (core->backend == nullptr)
     {
         wlr_log(WLR_ERROR, "Failed to create wlr_backend");
@@ -624,9 +703,9 @@ int Core::init(const sparrow_options & opts, bool allow_root)
         return (int)instance->callable_queue.execute();
     };
 
-    core->callable_queue_event_source = wl_event_loop_add_fd(core->wl_event_loop,
-        core->callable_queue.get_fd(), WL_EVENT_READABLE,
-        callable_queue_function, core);
+    core->callable_queue_event_source =
+        wl_event_loop_add_fd(core->wl_event_loop, core->callable_queue.get_fd(),
+            WL_EVENT_READABLE, callable_queue_function, core);
 
     core->fps_decay_timer = wl_event_loop_add_timer(
         core->wl_event_loop,
@@ -654,6 +733,29 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     if (drm_fd < 0)
     {
+        // When running with a non-DRM backend (e.g. headless for bot/PGO, X11, or
+        // Wayland nested), probe for an available hardware DRM render node to
+        // enable GPU acceleration instead of falling back to buggy software
+        // rendering (llvmpipe).
+        for (int i = 128; i < 136; ++i)
+        {
+            char node_path[32];
+            snprintf(node_path, sizeof(node_path), "/dev/dri/renderD%d", i);
+            int fd = open(node_path, O_RDWR | O_CLOEXEC);
+            if (fd >= 0)
+            {
+                drm_fd = fd;
+                wlr_log(
+                    WLR_INFO,
+                    "Auto-detected DRM render node for GPU acceleration: %s (fd=%d)",
+                    node_path, drm_fd);
+                break;
+            }
+        }
+    }
+
+    if (drm_fd < 0)
+    {
 #if WLR_HAS_UDMABUF_ALLOCATOR == 1
         wlr_log(WLR_ERROR, "Failed to open DRM render device, consider specifying "
                            "WLR_RENDER_DRM_DEVICE."
@@ -668,8 +770,6 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
         wl_display_destroy_clients(instance->wl_display);
         wl_display_destroy(instance->wl_display);
-        pthread_mutex_destroy(&instance->platform_task_list_mutex);
-        pthread_mutexattr_destroy(&mutex_attr);
         return EXIT_FAILURE;
 #endif
     }
@@ -704,6 +804,16 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     core->egl_display = wlr_egl_get_display(egl);
     core->egl_context = wlr_egl_get_context(egl);
 
+    // NOTE: wp_linux_drm_syncobj_manager_v1 (explicit sync) must NOT be
+    // advertised until Flutter's external texture pipeline can wait on client
+    // acquire timeline points and signal release timeline points. Advertising
+    // this protocol causes Mesa Vulkan WSI (e.g. mpv gpu-next) to disable
+    // implicit kernel sync and submit acquire/release timeline points that
+    // Sparrow never waits on or signals, leading to severe tearing and
+    // flickering. By keeping this disabled, clients fall back to standard DMA-BUF
+    // implicit sync fences where the Linux DRM kernel driver automatically
+    // synchronizes reader and writer access.
+#if 0
     if ((wlr_renderer_get_drm_fd(core->renderer) >= 0) &&
         core->renderer->features.timeline)
     {
@@ -711,12 +821,13 @@ int Core::init(const sparrow_options & opts, bool allow_root)
             core->wl_display, 1, wlr_renderer_get_drm_fd(core->renderer));
     }
 
-    core->allocator =
-        wlr_allocator_autocreate(core->backend, core->renderer);
+#endif
+
+    core->allocator = wlr_allocator_autocreate(core->backend, core->renderer);
     if (core->allocator == nullptr)
     {
-        wlr_log(WLR_ERROR,
-            "Failed to create allocator: neither DRM render node (/dev/dri) nor /dev/udmabuf is available");
+        wlr_log(WLR_ERROR, "Failed to create allocator: neither DRM render node "
+                           "(/dev/dri) nor /dev/udmabuf is available");
         wlr_egl_destroy(egl);
         wl_display_destroy_clients(core->wl_display);
         wl_display_destroy(core->wl_display);
@@ -757,15 +868,17 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     // Initialize multi-output support
     wl_list_init(&core->outputs);
+    wl_list_init(&core->session_lock_surfaces);
+    wl_list_init(&core->idle_inhibitors);
+    wl_list_init(&core->new_session_lock.link);
+    wl_list_init(&core->new_idle_inhibitor.link);
     core->vsync_output     = nullptr;
     core->next_output_id   = 0;
     core->vsync_rate_limit = 0;
 
-    wlr_color_representation_manager_v1_create_with_renderer(
-        core->wl_display, 1, core->renderer);
+    wlr_color_representation_manager_v1_create_with_renderer(core->wl_display, 1,
+        core->renderer);
 
-    wlr_log(WLR_INFO, "instance->renderer->features.input_color_transform %i",
-        core->renderer->features.input_color_transform);
     if (core->renderer->features.input_color_transform)
     {
         static const enum wp_color_manager_v1_render_intent render_intents[] = {
@@ -812,8 +925,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     wl_signal_add(&core->backend->events.new_output, &core->new_output);
 
     // XDG output manager - provides output info to clients (needed by grim, etc.)
-    wlr_xdg_output_manager_v1_create(core->wl_display,
-        core->output_layout);
+    wlr_xdg_output_manager_v1_create(core->wl_display, core->output_layout);
 
     // Output manager protocol - dynamic output configuration (wlr-randr,
     // wdisplays, kanshi)
@@ -822,8 +934,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     core->xdg_shell = wlr_xdg_shell_create(core->wl_display, 5);
     core->new_xdg_toplevel.notify = sparrow_new_xdg_toplevel;
-    wl_signal_add(&core->xdg_shell->events.new_toplevel,
-        &core->new_xdg_toplevel);
+    wl_signal_add(&core->xdg_shell->events.new_toplevel, &core->new_xdg_toplevel);
 
     wlr_tablet_v2_create(core->wl_display);
 
@@ -840,7 +951,10 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     core->idle_notifier = wlr_idle_notifier_v1_create(core->wl_display);
 
     // Idle inhibit - allows apps to prevent idle (video playback, presentations)
-    wlr_idle_inhibit_v1_create(core->wl_display);
+    sparrow_idle_inhibit_init(core);
+
+    // ext-session-lock-v1 - secure screen locking and full input/output blanking
+    sparrow_session_lock_init(core);
 
     // Legacy KDE server decoration protocol - set default mode to SERVER
     // This tells older clients (GTK3, some Qt, Firefox) that we prefer
@@ -860,8 +974,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     // bars)
     core->decoration_manager =
         wlr_xdg_decoration_manager_v1_create(core->wl_display);
-    core->new_toplevel_decoration.notify =
-        sparrow_handle_new_toplevel_decoration;
+    core->new_toplevel_decoration.notify = sparrow_handle_new_toplevel_decoration;
     wl_signal_add(&core->decoration_manager->events.new_toplevel_decoration,
         &core->new_toplevel_decoration);
 
@@ -882,8 +995,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
                           "(ext_foreign_toplevel_list_v1)");
     }
 
-    core->pointer_gestures =
-        wlr_pointer_gestures_v1_create(core->wl_display);
+    core->pointer_gestures = wlr_pointer_gestures_v1_create(core->wl_display);
     core->relative_pointer_manager =
         wlr_relative_pointer_manager_v1_create(core->wl_display);
     core->pointer_constraints =
@@ -895,8 +1007,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     if (core->virtual_keyboard_manager != nullptr)
     {
         core->new_virtual_keyboard.notify = handle_new_virtual_keyboard;
-        wl_signal_add(
-            &core->virtual_keyboard_manager->events.new_virtual_keyboard,
+        wl_signal_add(&core->virtual_keyboard_manager->events.new_virtual_keyboard,
             &core->new_virtual_keyboard);
         wlr_log(WLR_INFO,
             "Enabled virtual keyboard protocol (wlr_virtual_keyboard_v1)");
@@ -907,8 +1018,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     if (core->virtual_pointer_manager != nullptr)
     {
         core->new_virtual_pointer.notify = handle_new_virtual_pointer;
-        wl_signal_add(
-            &core->virtual_pointer_manager->events.new_virtual_pointer,
+        wl_signal_add(&core->virtual_pointer_manager->events.new_virtual_pointer,
             &core->new_virtual_pointer);
         wlr_log(WLR_INFO,
             "Enabled virtual pointer protocol (wlr_virtual_pointer_v1)");
@@ -952,8 +1062,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     // Handle popup surfaces (menus, dropdowns, tooltips)
     core->new_xdg_popup.notify = sparrow_new_xdg_popup;
-    wl_signal_add(&core->xdg_shell->events.new_popup,
-        &core->new_xdg_popup);
+    wl_signal_add(&core->xdg_shell->events.new_popup, &core->new_xdg_popup);
 
     auto socket = choose_socket(core->wl_display);
     if (!socket)
@@ -1000,10 +1109,10 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
     struct wl_event_loop *event_loop =
         wl_display_get_event_loop(core->wl_display);
-    core->sigint_event_source = wl_event_loop_add_signal(event_loop, SIGINT, handle_term_signal,
-        core);
-    core->sigterm_event_source = wl_event_loop_add_signal(event_loop, SIGTERM, handle_term_signal,
-        core);
+    core->sigint_event_source =
+        wl_event_loop_add_signal(event_loop, SIGINT, handle_term_signal, core);
+    core->sigterm_event_source =
+        wl_event_loop_add_signal(event_loop, SIGTERM, handle_term_signal, core);
 
     FlutterRendererConfig renderer_config = {};
     renderer_config.type = kOpenGL;
@@ -1078,9 +1187,9 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     sparrow_isolate_channel_init();
     sparrow_engine_init_channels();
 
-    const FlutterEngineResult fl_result = core->embedder_api.Run(
-        FLUTTER_ENGINE_VERSION, &renderer_config, &project_args, (void*)core,
-        &core->engine);
+    const FlutterEngineResult fl_result =
+        core->embedder_api.Run(FLUTTER_ENGINE_VERSION, &renderer_config,
+            &project_args, (void*)core, &core->engine);
 
     if (fl_result != kSuccess)
     {
@@ -1108,8 +1217,7 @@ int Core::init(const sparrow_options & opts, bool allow_root)
         window_metrics.pixel_ratio = 1.0;
         wlr_log(WLR_INFO, "Sending Flutter window metrics: %dx%d, pixel_ratio=%.2f",
             total_box.width, total_box.height, window_metrics.pixel_ratio);
-        core->embedder_api.SendWindowMetricsEvent(core->engine,
-            &window_metrics);
+        core->embedder_api.SendWindowMetricsEvent(core->engine, &window_metrics);
     }
 
     FlutterPointerEvent pointer_event = {};
@@ -1182,21 +1290,24 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     }
 
     if ((core->output_manager_apply.link.prev != nullptr) &&
-        (core->output_manager_apply.link.next != &core->output_manager_apply.link))
+        (core->output_manager_apply.link.next !=
+         &core->output_manager_apply.link))
     {
         wl_list_remove(&core->output_manager_apply.link);
         wl_list_init(&core->output_manager_apply.link);
     }
 
     if ((core->output_manager_test.link.prev != nullptr) &&
-        (core->output_manager_test.link.next != &core->output_manager_test.link))
+        (core->output_manager_test.link.next !=
+         &core->output_manager_test.link))
     {
         wl_list_remove(&core->output_manager_test.link);
         wl_list_init(&core->output_manager_test.link);
     }
 
     if ((core->output_power_manager_set_mode.link.prev != nullptr) &&
-        (core->output_power_manager_set_mode.link.next != &core->output_power_manager_set_mode.link))
+        (core->output_power_manager_set_mode.link.next !=
+         &core->output_power_manager_set_mode.link))
     {
         wl_list_remove(&core->output_power_manager_set_mode.link);
         wl_list_init(&core->output_power_manager_set_mode.link);
@@ -1225,25 +1336,29 @@ int Core::init(const sparrow_options & opts, bool allow_root)
     Output *out, *out_tmp;
     wl_list_for_each_safe(out, out_tmp, &core->outputs, link)
     {
-        if ((out->destroy.link.prev != nullptr) && (out->destroy.link.next != nullptr))
+        if ((out->destroy.link.prev != nullptr) &&
+            (out->destroy.link.next != nullptr))
         {
             wl_list_remove(&out->destroy.link);
             wl_list_init(&out->destroy.link);
         }
 
-        if ((out->frame.link.prev != nullptr) && (out->frame.link.next != nullptr))
+        if ((out->frame.link.prev != nullptr) &&
+            (out->frame.link.next != nullptr))
         {
             wl_list_remove(&out->frame.link);
             wl_list_init(&out->frame.link);
         }
 
-        if ((out->request_state.link.prev != nullptr) && (out->request_state.link.next != nullptr))
+        if ((out->request_state.link.prev != nullptr) &&
+            (out->request_state.link.next != nullptr))
         {
             wl_list_remove(&out->request_state.link);
             wl_list_init(&out->request_state.link);
         }
 
-        if ((out->present.link.prev != nullptr) && (out->present.link.next != nullptr))
+        if ((out->present.link.prev != nullptr) &&
+            (out->present.link.next != nullptr))
         {
             wl_list_remove(&out->present.link);
             wl_list_init(&out->present.link);
@@ -1271,7 +1386,6 @@ int Core::init(const sparrow_options & opts, bool allow_root)
 
         wlr_damage_ring_finish(&out->damage_ring);
         pixman_region32_fini(&out->client_damage);
-        pthread_mutex_destroy(&out->damage_mutex);
 #ifdef DAMAGE_HISTORY
         for (int i = 0; i < NUM_DAMAGE_HISTORY; i++)
         {

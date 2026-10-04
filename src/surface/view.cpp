@@ -1,9 +1,11 @@
 #include "view.hpp"
+#include <mutex>
 #include "core.hpp"
-#include "input/pointer.hpp"
-#include "sub_surface.hpp"
 #include "flutter/platform/text_input.hpp"
-
+#include "input/pointer.hpp"
+#include "output.hpp"
+#include "session_lock.hpp"
+#include "sub_surface.hpp"
 void sparrow_view_damage_whole(SparrowView *view)
 {
     if (!view)
@@ -18,7 +20,8 @@ void sparrow_view_damage_whole(SparrowView *view)
         return;
     }
 
-    Output *output = view->current_output ? view->current_output : sparrow_get_first_output();
+    Output *output =
+        view->current_output ? view->current_output : sparrow_get_first_output();
     if (!output || !output->wlr_output)
     {
         if ((view->width > 0) && (view->height > 0))
@@ -35,15 +38,33 @@ void sparrow_view_damage_whole(SparrowView *view)
         return;
     }
 
-    const int out_w    = output->wlr_output->width;
-    const int out_h    = output->wlr_output->height;
-    struct wlr_box box = {
-        .x     = view->x,
-        .y     = view->y,
-        .width = out_w,
-        .height = out_h,
-    };
+    // If the view had a previous scene box that differs from current, damage it too
+    // so background/underlying layers get properly redrawn
+    if ((view->last_scene_box.width > 0) && (view->last_scene_box.height > 0))
+    {
+        sparrow_damage_add_box(&view->last_scene_box, true);
+    }
+
+    int out_w = 0, out_h = 0;
+    wlr_output_effective_resolution(output->wlr_output, &out_w, &out_h);
+
+    struct wlr_box box = {};
+    if (view->maximized || view->fullscreen)
+    {
+        box.x     = 0;
+        box.y     = 0;
+        box.width = out_w;
+        box.height = out_h;
+    } else if (!sparrow_view_get_scene_box(view, &box))
+    {
+        box.x     = view->x;
+        box.y     = view->y;
+        box.width = (view->width > 0) ? view->width : out_w;
+        box.height = (view->height > 0) ? view->height : out_h;
+    }
+
     sparrow_damage_add_box(&box, true);
+    view->last_scene_box = box;
 }
 
 void sparrow_view_damage_add_rect(SparrowView *view, int x, int y, int width,
@@ -69,35 +90,42 @@ void sparrow_view_damage_add_rect(SparrowView *view, int x, int y, int width,
         return;
     }
 
-    Output *output = view->current_output ? view->current_output : sparrow_get_first_output();
+    Output *output =
+        view->current_output ? view->current_output : sparrow_get_first_output();
     if (!output || !output->wlr_output)
     {
         return;
     }
 
-    const int out_w = output->wlr_output->width;
-    const int out_h = output->wlr_output->height;
-
-    // If view dimensions (visW, visH) differ from container/output size (e.g. CPU-X),
-    // Flutter SurfaceView scales with uniform aspect-ratio and centers with black bars:
-    // scale = min(out_w / vis_w, out_h / vis_h)
-    // target_w = vis_w * scale, target_h = vis_h * scale
-    // black_bar_x = (out_w - target_w) / 2, black_bar_y = (out_h - target_h) / 2
-    const int vis_w = view->width > 0 ? view->width : out_w;
-    const int vis_h = view->height > 0 ? view->height : out_h;
-    const double scale_x = (vis_w > 0) ? ((double)out_w / (double)vis_w) : 1.0;
-    const double scale_y = (vis_h > 0) ? ((double)out_h / (double)vis_h) : 1.0;
-    const double scale   = (scale_x < scale_y) ? scale_x : scale_y;
-
-    const int target_w    = (int)lround(vis_w * scale);
-    const int target_h    = (int)lround(vis_h * scale);
-    const int black_bar_x = (out_w - target_w) / 2;
-    const int black_bar_y = (out_h - target_h) / 2;
-
-    const int mapped_x = (int)lround(view->x + black_bar_x + (x - view->geo_x) * scale);
-    const int mapped_y = (int)lround(view->y + black_bar_y + (y - view->geo_y) * scale);
-    const int mapped_w = (int)lround(width * scale);
-    const int mapped_h = (int)lround(height * scale);
+    struct wlr_box scene_box = {};
+    int mapped_x = 0, mapped_y = 0, mapped_w = 0, mapped_h = 0;
+    if (sparrow_view_get_scene_box(view, &scene_box))
+    {
+        const int base_x = scene_box.x;
+        const int base_y = scene_box.y;
+        if ((scene_box.width > 0) && (view->width > 0) &&
+            ((scene_box.width != view->width) || (scene_box.height != view->height)))
+        {
+            const double scale_x = (double)scene_box.width / (double)view->width;
+            const double scale_y = (double)scene_box.height / (double)view->height;
+            mapped_x = base_x + (int)lround((x - view->geo_x) * scale_x);
+            mapped_y = base_y + (int)lround((y - view->geo_y) * scale_y);
+            mapped_w = (int)lround(width * scale_x);
+            mapped_h = (int)lround(height * scale_y);
+        } else
+        {
+            mapped_x = base_x + (x - view->geo_x);
+            mapped_y = base_y + (y - view->geo_y);
+            mapped_w = width;
+            mapped_h = height;
+        }
+    } else
+    {
+        mapped_x = view->x + (x - view->geo_x);
+        mapped_y = view->y + (y - view->geo_y);
+        mapped_w = width;
+        mapped_h = height;
+    }
 
     struct wlr_box box = {
         .x     = mapped_x,
@@ -108,7 +136,8 @@ void sparrow_view_damage_add_rect(SparrowView *view, int x, int y, int width,
     sparrow_damage_add_box(&box, true);
 }
 
-bool sparrow_view_get_scene_box(const SparrowView *view, struct wlr_box *out_box)
+bool sparrow_view_get_scene_box(const SparrowView *view,
+    struct wlr_box *out_box)
 {
     Core *instance = Core::instance();
 
@@ -119,26 +148,27 @@ bool sparrow_view_get_scene_box(const SparrowView *view, struct wlr_box *out_box
 
     struct sparrow_renderer *renderer = &instance->sparrow_renderer;
 
-    pthread_mutex_lock(&renderer->render_mutex);
     bool found = false;
     struct wlr_box box = {};
-
-    for (int i = 0; i < (int)renderer->current_scene.layers_count; i++)
     {
-        const struct sparrow_renderer_scene_layer *layer = &renderer->current_scene.layers[i];
-        if ((layer->type == sceneLayerPlatform) &&
-            (layer->platform.platform_view_id == view->handle))
+        std::lock_guard<std::recursive_mutex> lock(renderer->render_mutex);
+
+        for (int i = 0; i < (int)renderer->current_scene.layers_count; i++)
         {
-            box.x     = (int)lround(layer->offset.x);
-            box.y     = (int)lround(layer->offset.y);
-            box.width = (int)lround(layer->size.width);
-            box.height = (int)lround(layer->size.height);
-            found = true;
-            break;
+            const struct sparrow_renderer_scene_layer *layer =
+                &renderer->current_scene.layers[i];
+            if ((layer->type == sceneLayerPlatform) &&
+                (layer->platform.platform_view_id == view->handle))
+            {
+                box.x     = (int)lround(layer->offset.x);
+                box.y     = (int)lround(layer->offset.y);
+                box.width = (int)lround(layer->size.width);
+                box.height = (int)lround(layer->size.height);
+                found = true;
+                break;
+            }
         }
     }
-
-    pthread_mutex_unlock(&renderer->render_mutex);
 
     if (!found)
     {
@@ -188,8 +218,7 @@ bool sparrow_view_filter_occluded_damage(
 {
     Core *instance = Core::instance();
 
-    if (!view || !instance || !damage ||
-        !pixman_region32_not_empty(damage))
+    if (!view || !instance || !damage || !pixman_region32_not_empty(damage))
     {
         return false;
     }
@@ -208,66 +237,67 @@ bool sparrow_view_filter_occluded_damage(
     pixman_region32_t opaque_above;
     pixman_region32_init(&opaque_above);
 
-    pthread_mutex_lock(&renderer->render_mutex);
-    int view_layer_idx = -1;
-    for (int i = 0; i < (int)renderer->current_scene.layers_count; i++)
     {
-        struct sparrow_renderer_scene_layer *layer = &renderer->current_scene.layers[i];
-        if ((layer->type == sceneLayerPlatform) &&
-            (layer->platform.platform_view_id == view->handle))
+        std::lock_guard<std::recursive_mutex> lock(renderer->render_mutex);
+        int view_layer_idx = -1;
+        for (int i = 0; i < (int)renderer->current_scene.layers_count; i++)
         {
-            view_layer_idx = i;
-            break;
-        }
-    }
-
-    if (view_layer_idx >= 0)
-    {
-        // Layers with index > view_layer_idx are stacked ON TOP of this view in
-        // Flutter
-        for (int j = view_layer_idx + 1;
-             j < (int)renderer->current_scene.layers_count; j++)
-        {
-            struct sparrow_renderer_scene_layer *top_layer =
-                &renderer->current_scene.layers[j];
-            if (top_layer->type == sceneLayerPlatform)
+            struct sparrow_renderer_scene_layer *layer =
+                &renderer->current_scene.layers[i];
+            if ((layer->type == sceneLayerPlatform) &&
+                (layer->platform.platform_view_id == view->handle))
             {
-                uint32_t top_handle   = top_layer->platform.platform_view_id;
-                SparrowView *top_view = instance->find_view_by_handle(top_handle);
-                if (top_view && top_view->xdg_surface &&
-                    top_view->xdg_surface->surface)
+                view_layer_idx = i;
+                break;
+            }
+        }
+
+        if (view_layer_idx >= 0)
+        {
+            // Layers with index > view_layer_idx are stacked ON TOP of this view in
+            // Flutter
+            for (int j = view_layer_idx + 1;
+                 j < (int)renderer->current_scene.layers_count; j++)
+            {
+                struct sparrow_renderer_scene_layer *top_layer =
+                    &renderer->current_scene.layers[j];
+                if (top_layer->type == sceneLayerPlatform)
                 {
-                    struct wlr_surface *top_surf = top_view->xdg_surface->surface;
-                    const int top_x = (int)lround(top_layer->offset.x);
-                    const int top_y = (int)lround(top_layer->offset.y);
-                    if (pixman_region32_not_empty(&top_surf->current.opaque))
+                    uint32_t top_handle   = top_layer->platform.platform_view_id;
+                    SparrowView *top_view = instance->find_view_by_handle(top_handle);
+                    if (top_view && top_view->xdg_surface &&
+                        top_view->xdg_surface->surface)
                     {
-                        pixman_region32_t top_op;
-                        pixman_region32_init(&top_op);
-                        pixman_region32_copy(&top_op, &top_surf->current.opaque);
-                        pixman_region32_translate(&top_op, top_x, top_y);
-                        pixman_region32_union(&opaque_above, &opaque_above, &top_op);
-                        pixman_region32_fini(&top_op);
-                    } else if (top_view->maximized || top_view->fullscreen)
-                    {
-                        // Maximized/fullscreen windows are considered fully opaque over
-                        // their bounds
-                        pixman_region32_t top_op;
-                        int tw = (int)lround(top_layer->size.width);
-                        int th = (int)lround(top_layer->size.height);
-                        if ((tw > 0) && (th > 0))
+                        struct wlr_surface *top_surf = top_view->xdg_surface->surface;
+                        const int top_x = (int)lround(top_layer->offset.x);
+                        const int top_y = (int)lround(top_layer->offset.y);
+                        if (pixman_region32_not_empty(&top_surf->current.opaque))
                         {
-                            pixman_region32_init_rect(&top_op, top_x, top_y, tw, th);
+                            pixman_region32_t top_op;
+                            pixman_region32_init(&top_op);
+                            pixman_region32_copy(&top_op, &top_surf->current.opaque);
+                            pixman_region32_translate(&top_op, top_x, top_y);
                             pixman_region32_union(&opaque_above, &opaque_above, &top_op);
                             pixman_region32_fini(&top_op);
+                        } else if (top_view->maximized || top_view->fullscreen)
+                        {
+                            // Maximized/fullscreen windows are considered fully opaque over
+                            // their bounds
+                            pixman_region32_t top_op;
+                            int tw = (int)lround(top_layer->size.width);
+                            int th = (int)lround(top_layer->size.height);
+                            if ((tw > 0) && (th > 0))
+                            {
+                                pixman_region32_init_rect(&top_op, top_x, top_y, tw, th);
+                                pixman_region32_union(&opaque_above, &opaque_above, &top_op);
+                                pixman_region32_fini(&top_op);
+                            }
                         }
                     }
                 }
             }
         }
     }
-
-    pthread_mutex_unlock(&renderer->render_mutex);
 
     if (pixman_region32_not_empty(&opaque_above))
     {
@@ -281,8 +311,37 @@ bool sparrow_view_filter_occluded_damage(
     return pixman_region32_not_empty(visible_damage_out);
 }
 
+bool sparrow_view_contains_surface(const SparrowView *view,
+    const struct wlr_surface *surface)
+{
+    if (!view || !view->xdg_surface || !surface)
+    {
+        return false;
+    }
+
+    if (view->xdg_surface->surface == surface)
+    {
+        return true;
+    }
+
+    SparrowSubSurface *sub = nullptr;
+    wl_list_for_each(sub, &view->subsurfaces, link)
+    {
+        if (sub->surface == surface)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void sparrow_view_focus(SparrowView *view)
 {
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     if (view == nullptr)
     {
         return;
@@ -295,7 +354,8 @@ void sparrow_view_focus(SparrowView *view)
     if (prev_surface == surface)
     {
         if (view->xdg_surface && view->xdg_surface->initialized &&
-            (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) && view->toplevel)
+            (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+            view->toplevel)
         {
             if (!view->activated)
             {
@@ -309,26 +369,26 @@ void sparrow_view_focus(SparrowView *view)
             }
         }
 
-        double sx, sy;
-        const struct wlr_scene_node *node =
-            wlr_scene_node_at(&instance->scene->tree.node, instance->cursor->x,
-                              instance->cursor->y, &sx, &sy);
-        if (node)
+        if (!sparrow_view_contains_surface(view,
+            seat->pointer_state.focused_surface))
         {
-            wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
-            wlr_seat_pointer_notify_frame(seat);
-        } else
-        {
-            wlr_seat_pointer_notify_enter(seat, surface, 0, 0);
-            wlr_seat_pointer_notify_frame(seat);
+            double sx, sy;
+            const struct wlr_scene_node *node =
+                wlr_scene_node_at(&instance->scene->tree.node, instance->cursor->x,
+                                  instance->cursor->y, &sx, &sy);
+            if (node)
+            {
+                wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+                wlr_seat_pointer_notify_frame(seat);
+            }
         }
 
         sparrow_pointer_constraints_set_focus(instance, surface);
 
         if (view->texture_registered)
         {
-            instance->embedder_api.MarkExternalTextureFrameAvailable(instance->engine,
-                view->texture_id);
+            instance->embedder_api.MarkExternalTextureFrameAvailable(
+                instance->engine, view->texture_id);
         }
 
         return;
@@ -338,7 +398,8 @@ void sparrow_view_focus(SparrowView *view)
     {
         struct wlr_xdg_surface *previous = wlr_xdg_surface_try_from_wlr_surface(
             seat->keyboard_state.focused_surface);
-        if (previous && previous->initialized && (previous->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+        if (previous && previous->initialized &&
+            (previous->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
             previous->toplevel)
         {
             wlr_xdg_toplevel_set_activated(previous->toplevel, false);
@@ -373,8 +434,8 @@ void sparrow_view_focus(SparrowView *view)
 
             if (other_view->foreign_toplevel)
             {
-                wlr_foreign_toplevel_handle_v1_set_activated(other_view->foreign_toplevel,
-                    false);
+                wlr_foreign_toplevel_handle_v1_set_activated(
+                    other_view->foreign_toplevel, false);
             }
         }
     }
@@ -382,7 +443,8 @@ void sparrow_view_focus(SparrowView *view)
     struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
     sparrow_text_input_stop_repeat(0);
     if (view->xdg_surface && view->xdg_surface->initialized &&
-        (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) && view->toplevel)
+        (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+        view->toplevel)
     {
         wlr_xdg_toplevel_set_activated(view->toplevel, true);
         view->activated = true;
@@ -404,19 +466,19 @@ void sparrow_view_focus(SparrowView *view)
         wlr_seat_keyboard_notify_enter(seat, surface, nullptr, 0, &modifiers);
     }
 
-    double sx, sy;
-    const struct wlr_scene_node *node =
-        wlr_scene_node_at(&instance->scene->tree.node, instance->cursor->x,
-                          instance->cursor->y, &sx, &sy);
+    if (!sparrow_view_contains_surface(view,
+        seat->pointer_state.focused_surface))
+    {
+        double sx, sy;
+        const struct wlr_scene_node *node =
+            wlr_scene_node_at(&instance->scene->tree.node, instance->cursor->x,
+                              instance->cursor->y, &sx, &sy);
 
-    if (node)
-    {
-        wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
-        wlr_seat_pointer_notify_frame(seat);
-    } else
-    {
-        wlr_seat_pointer_notify_enter(seat, surface, 0, 0);
-        wlr_seat_pointer_notify_frame(seat);
+        if (node)
+        {
+            wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
+            wlr_seat_pointer_notify_frame(seat);
+        }
     }
 
     sparrow_pointer_constraints_set_focus(instance, surface);
@@ -443,6 +505,11 @@ void sparrow_view_focus(SparrowView *view)
 
 bool sparrow_view_is_visible(const SparrowView *view)
 {
+    if (sparrow_is_session_locked())
+    {
+        return false;
+    }
+
     if (!view || !view->xdg_surface || !view->xdg_surface->surface ||
         !view->xdg_surface->surface->mapped)
     {
@@ -468,20 +535,23 @@ bool sparrow_view_is_visible(const SparrowView *view)
         return true;
     }
 
-    // 3. Normal mode: if this view is activated (the current focused page), it is visible
+    // 3. Normal mode: if this view is activated (the current focused page), it is
+    // visible
     if (view->activated)
     {
         return true;
     }
 
     // 4. Single-view fallback: if there is only 1 mapped view in the compositor,
-    // it is on the only page, so it is visible even if focus is temporarily cleared
+    // it is on the only page, so it is visible even if focus is temporarily
+    // cleared
     size_t mapped_view_count     = 0;
     const SparrowView *only_view = nullptr;
     const SparrowView *v = nullptr;
     wl_list_for_each(v, &instance->views_list, link)
     {
-        if (v->xdg_surface && v->xdg_surface->surface && v->xdg_surface->surface->mapped)
+        if (v->xdg_surface && v->xdg_surface->surface &&
+            v->xdg_surface->surface->mapped)
         {
             mapped_view_count++;
             only_view = v;

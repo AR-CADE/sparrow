@@ -10,8 +10,7 @@
 #endif
 #include <EGL/egl.h>
 #include <atomic>
-#include <bits/pthreadtypes.h>
-#include <pthread.h>
+#include <mutex>
 
 #include <flutter_embedder.h>
 #include <sparrow/nonstd/wlroots-full.hpp>
@@ -199,8 +198,8 @@ struct sparrow_renderer
     bool has_dmabuf_import = false;
 #endif
     wlr_egl *egl = nullptr;
-    pthread_mutex_t render_mutex;
-    pthread_mutex_t texture_mutex; // Protects texture operations across threads
+    std::recursive_mutex render_mutex;
+    std::recursive_mutex texture_mutex; // Protects texture operations across threads
 };
 
 typedef void (*gl_resolved_fn)();

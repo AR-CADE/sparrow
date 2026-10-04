@@ -177,6 +177,9 @@ extern "C" {
 
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 // #define _wlr_log(verbosity, format, ...) _WLR_ATTRIB_PRINTF(2, 3);
+#include <wayland-client.h>
+#include <wayland-cursor.h>
+#include <wayland-egl.h>
 }
 
 #endif

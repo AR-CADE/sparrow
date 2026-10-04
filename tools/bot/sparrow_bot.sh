@@ -25,12 +25,16 @@ DURATION_SEC=10
 PGO_MODE=false
 VERBOSE=false
 HEADLESS=false
+APPS_CONFIG=""
 
 for arg in "$@"; do
     case "$arg" in
         --pgo|-p)
             PGO_MODE=true
-            DURATION_SEC=25
+            APPS_CONFIG="${ROOT_DIR}/tools/bot/pgo_apps.json"
+            ;;
+        --apps-config=*|-c=*)
+            APPS_CONFIG="${arg#*=}"
             ;;
         --headless|-H)
             HEADLESS=true
@@ -47,11 +51,12 @@ for arg in "$@"; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --headless, -H      Run in headless mode (WLR_BACKENDS=headless, for Docker/CI)"
-            echo "  --pgo, -p           Run extended workload (25s) for PGO profiling"
-            echo "  --duration=N, -d=N  Run custom duration in seconds (default: 10s)"
-            echo "  --verbose, -v       Stream compositor logs in real-time"
-            echo "  --help, -h          Show this help message"
+            echo "  --headless, -H           Run in headless mode (WLR_BACKENDS=headless, for Docker/CI)"
+            echo "  --pgo, -p                Run declarative PGO profiling workload via pgo_apps.json"
+            echo "  --apps-config=F, -c=F    Run declarative app workload from JSON configuration file"
+            echo "  --duration=N, -d=N       Run custom duration in seconds (default: 10s)"
+            echo "  --verbose, -v            Stream compositor logs in real-time"
+            echo "  --help, -h               Show this help message"
             exit 0
             ;;
     esac
@@ -130,7 +135,7 @@ mkdir -p "$OUT_DIR"
 rm -f "$LOG_FILE"
 
 # If in PGO mode, set the raw profile output destination
-if [ "$PGO_MODE" = true ]; then
+if [ "$PGO_MODE" = true ] && [ -z "$LLVM_PROFILE_FILE" ]; then
     export LLVM_PROFILE_FILE="${ROOT_DIR}/sparrow.profraw"
     rm -f "$LLVM_PROFILE_FILE"
 fi
@@ -142,6 +147,16 @@ if [ -z "$XDG_RUNTIME_DIR" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
     chmod 0700 "$XDG_RUNTIME_DIR"
 fi
 export LD_LIBRARY_PATH="${OUT_DIR}/shell/lib:${ROOT_DIR}/subprojects/flutter_embedder:${LD_LIBRARY_PATH}"
+export mesa_glthread=false
+
+if [ -z "$WLR_RENDER_DRM_DEVICE" ]; then
+    for node in /dev/dri/renderD*; do
+        if [ -e "$node" ] && head -c 0 "$node" 2>/dev/null; then
+            export WLR_RENDER_DRM_DEVICE="$node"
+            break
+        fi
+    done
+fi
 
 # 2. Launch Sparrow
 echo -e "${CYAN}[1/4] Starting Sparrow compositor...${NC}"
@@ -189,47 +204,58 @@ echo -e "${CYAN}[2/4] Executing automated UI interactions via wlrctl...${NC}"
 
 export WAYLAND_DISPLAY="$SPARROW_DISPLAY"
 
-START_TIME=$(date +%s)
-LOOP_COUNT=0
+if [ -n "$APPS_CONFIG" ] && [ -f "$APPS_CONFIG" ]; then
+    echo -e "  -> Executing declarative application workload from ${CYAN}${APPS_CONFIG}${NC}..."
+    EXTRA_FLAGS=""
+    [ "$VERBOSE" = true ] && EXTRA_FLAGS="-v"
+    python3 "${ROOT_DIR}/tools/bot/pgo_workload_runner.py" --config "$APPS_CONFIG" $EXTRA_FLAGS
+else
+    START_TIME=$(date +%s)
+    LOOP_COUNT=0
 
-while [ $(($(date +%s) - START_TIME)) -lt "$DURATION_SEC" ]; do
-    LOOP_COUNT=$((LOOP_COUNT + 1))
-    echo -e "  -> Iteration #${LOOP_COUNT}: Injecting events & synthetic inputs..."
+    while [ $(($(date +%s) - START_TIME)) -lt "$DURATION_SEC" ]; do
+        LOOP_COUNT=$((LOOP_COUNT + 1))
+        echo -e "  -> Iteration #${LOOP_COUNT}: Injecting events & synthetic inputs..."
 
-    # Test runtime hotkeys
-    wlrctl keyboard type "sparrow-bot-pacing-test" || true
-    sleep 0.2
+        # Test runtime hotkeys
+        wlrctl keyboard type "sparrow-bot-pacing-test" || true
+        sleep 0.2
 
-    # Pointer motion across screen
-    for x in 100 300 600 900 1200 800 400 150; do
-        for y in 100 250 450 650 350; do
-            wlrctl pointer move "$x" "$y" 2>/dev/null || true
-            usleep 20000 2>/dev/null || sleep 0.02
+        # Pointer motion across screen
+        for x in 100 300 600 900 1200 800 400 150; do
+            for y in 100 250 450 650 350; do
+                wlrctl pointer move "$x" "$y" 2>/dev/null || true
+                usleep 20000 2>/dev/null || sleep 0.02
+            done
         done
+
+        # Click & drag simulation
+        wlrctl pointer click left 2>/dev/null || true
+        sleep 0.1
+        wlrctl pointer click right 2>/dev/null || true
+        sleep 0.1
+
+        # Launch a client application if available
+        if [ -n "$TEST_CLIENT" ] && [ "$LOOP_COUNT" -eq 1 ]; then
+            echo -e "  -> Launching test client: ${TEST_CLIENT}"
+            "$TEST_CLIENT" 2>/dev/null &
+            CLIENT_PID=$!
+            sleep 1.0
+            # Type into the client and execute command with Enter
+            if [ -x "${ROOT_DIR}/tools/bot/repro_clients/sparrow_key" ]; then
+                "${ROOT_DIR}/tools/bot/repro_clients/sparrow_key" type "echo 'sparrow test bot active'\n" 2>/dev/null || true
+            else
+                wlrctl keyboard type "echo 'sparrow test bot active'" 2>/dev/null || true
+            fi
+        fi
+
+        sleep 0.5
     done
 
-    # Click & drag simulation
-    wlrctl pointer click left 2>/dev/null || true
-    sleep 0.1
-    wlrctl pointer click right 2>/dev/null || true
-    sleep 0.1
-
-    # Launch a client application if available
-    if [ -n "$TEST_CLIENT" ] && [ "$LOOP_COUNT" -eq 1 ]; then
-        echo -e "  -> Launching test client: ${TEST_CLIENT}"
-        "$TEST_CLIENT" 2>/dev/null &
-        CLIENT_PID=$!
-        sleep 1.0
-        # Type into the client
-        wlrctl keyboard type "echo 'sparrow test bot active'" 2>/dev/null || true
+    # Kill test client if launched
+    if [ -n "${CLIENT_PID:-}" ]; then
+        kill "$CLIENT_PID" 2>/dev/null || true
     fi
-
-    sleep 0.5
-done
-
-# Kill test client if launched
-if [ -n "${CLIENT_PID:-}" ]; then
-    kill "$CLIENT_PID" 2>/dev/null || true
 fi
 
 # 4. Graceful Shutdown & Validation

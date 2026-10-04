@@ -20,13 +20,14 @@ runner_dependencies = [
   vulkan_dep,
   embedder,
   libplatform,
+  simdjson_dep,
 ]
 
 runner_inc = [
   include_directories('.'),
   sparrow_conf_inc,
   platform_inc,
-  rapidjson_inc,
+  simdjson_inc,
   text_input_inc,
 ]
 

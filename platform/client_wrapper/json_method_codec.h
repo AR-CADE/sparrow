@@ -5,15 +5,14 @@
 #ifndef FLUTTER_SHELL_PLATFORM_COMMON_JSON_METHOD_CODEC_H_
 #define FLUTTER_SHELL_PLATFORM_COMMON_JSON_METHOD_CODEC_H_
 
-#include <rapidjson/document.h>
-
+#include "encodable_value.h"
 #include "method_call.h"
 #include "method_codec.h"
 
 namespace flutter {
 
 // An implementation of MethodCodec that uses JSON strings as the serialization.
-class JsonMethodCodec : public MethodCodec<rapidjson::Document> {
+class JsonMethodCodec : public MethodCodec<EncodableValue> {
  public:
   // Returns the shared instance of the codec.
   static const JsonMethodCodec& GetInstance();
@@ -29,29 +28,29 @@ class JsonMethodCodec : public MethodCodec<rapidjson::Document> {
   JsonMethodCodec() = default;
 
   // |flutter::MethodCodec|
-  std::unique_ptr<MethodCall<rapidjson::Document>> DecodeMethodCallInternal(
+  std::unique_ptr<MethodCall<EncodableValue>> DecodeMethodCallInternal(
       const uint8_t* message,
       const size_t message_size) const override;
 
   // |flutter::MethodCodec|
   std::unique_ptr<std::vector<uint8_t>> EncodeMethodCallInternal(
-      const MethodCall<rapidjson::Document>& method_call) const override;
+      const MethodCall<EncodableValue>& method_call) const override;
 
   // |flutter::MethodCodec|
   std::unique_ptr<std::vector<uint8_t>> EncodeSuccessEnvelopeInternal(
-      const rapidjson::Document* result) const override;
+      const EncodableValue* result) const override;
 
   // |flutter::MethodCodec|
   std::unique_ptr<std::vector<uint8_t>> EncodeErrorEnvelopeInternal(
       const std::string& error_code,
       const std::string& error_message,
-      const rapidjson::Document* error_details) const override;
+      const EncodableValue* error_details) const override;
 
   // |flutter::MethodCodec|
   bool DecodeAndProcessResponseEnvelopeInternal(
       const uint8_t* response,
       const size_t response_size,
-      MethodResult<rapidjson::Document>* result) const override;
+      MethodResult<EncodableValue>* result) const override;
 };
 
 }  // namespace flutter

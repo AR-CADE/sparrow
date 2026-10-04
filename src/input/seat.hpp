@@ -3,7 +3,6 @@
 
 #include <cstdint>
 
-#include "flutter_embedder.h"
 #include "touch.hpp"
 #include <memory>
 #include <optional>
@@ -91,22 +90,6 @@ struct pointer_point
 class Core;
 class Output;
 class SparrowView;
-
-/* enum sparrow_grab_type {
- *   SPARROW_GRAB_NONE = 0, SPARROW_GRAB_MOVE, SPARROW_GRAB_RESIZE,
- *  };
- *
- *  struct sparrow_grab_state {
- *   enum sparrow_grab_type type = {};
- *   uint32_t view_handle = 0;
- *   double start_cursor_x = 0;
- *   double start_cursor_y = 0;
- *   int start_view_x = 0;
- *   int start_view_y = 0;
- *   int start_view_width = 0;
- *   int start_view_height = 0;
- *   uint32_t resize_edges = 0;
- *  }; */
 
 enum ScrollDirection
 {

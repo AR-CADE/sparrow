@@ -1,11 +1,11 @@
+#include <mutex>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <vector>
-#include <mutex>
 
 #include "core.hpp"
+#include "output.hpp"
 #include "task.hpp"
-
 pid_t get_tid()
 {
 #ifdef SYS_gettid

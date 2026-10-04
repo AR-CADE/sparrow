@@ -6,11 +6,9 @@
 #include <string>
 #include <vector>
 
-#include <wayland-client.h>
-#include <wayland-egl.h>
-#include <wayland-cursor.h>
-#include "xdg-shell-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "xdg-shell-client-protocol.h"
+#include <sparrow/nonstd/wlroots-full.hpp>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -22,12 +20,9 @@ class WaylandWindow
     WaylandWindow();
     ~WaylandWindow();
 
-    bool init(const std::string & app_id,
-        const std::string & title,
-        int32_t initial_width  = 1280,
-        int32_t initial_height = 720,
-        bool fullscreen = false,
-        bool maximized  = false,
+    bool init(const std::string & app_id, const std::string & title,
+        int32_t initial_width = 1280, int32_t initial_height = 720,
+        bool fullscreen = false, bool maximized = false,
         bool enable_egl = true);
 
     void shutdown();
@@ -47,35 +42,35 @@ class WaylandWindow
     bool clear_current();
     bool make_resource_current();
     bool swap_buffers();
-    static void * gl_proc_resolver(void *user_data, const char *name);
+    static void *gl_proc_resolver(void *user_data, const char *name);
 
     // Accessors
-    struct wl_display * get_display() const
+    struct wl_display *get_display() const
     {
         return display_;
     }
 
-    struct wl_compositor * get_compositor() const
+    struct wl_compositor *get_compositor() const
     {
         return compositor_;
     }
 
-    struct wp_cursor_shape_manager_v1 * get_cursor_shape_manager() const
+    struct wp_cursor_shape_manager_v1 *get_cursor_shape_manager() const
     {
         return cursor_shape_manager_;
     }
 
-    struct wl_surface * get_surface() const
+    struct wl_surface *get_surface() const
     {
         return surface_;
     }
 
-    struct wl_seat * get_seat() const
+    struct wl_seat *get_seat() const
     {
         return seat_;
     }
 
-    struct wl_shm * get_shm() const
+    struct wl_shm *get_shm() const
     {
         return shm_;
     }
@@ -105,12 +100,17 @@ class WaylandWindow
         return maximized_;
     }
 
-    const std::string& get_title() const
+    bool is_activated() const
+    {
+        return activated_;
+    }
+
+    const std::string&get_title() const
     {
         return title_;
     }
 
-    const std::string& get_app_id() const
+    const std::string&get_app_id() const
     {
         return app_id_;
     }
@@ -135,14 +135,16 @@ class WaylandWindow
         return last_serial_;
     }
 
-    const std::string& get_cached_clipboard_text() const
+    const std::string&get_cached_clipboard_text() const
     {
         return clipboard_text_;
     }
 
     // Callbacks
-    std::function<void(int32_t width, int32_t height, double pixel_ratio)> on_window_metrics_changed;
+    std::function<void(int32_t width, int32_t height, double pixel_ratio)>
+    on_window_metrics_changed;
     std::function<void(int32_t width, int32_t height)> on_window_resized;
+    std::function<void(bool activated)> on_window_activated;
     std::function<void()> on_close_requested;
     std::function<void(struct wl_seat *seat)> on_seat_bound;
     std::function<void(int fd)> on_ipc_fd_received;
@@ -157,22 +159,29 @@ class WaylandWindow
 
     // Internal Wayland protocol handlers
     void handle_ipc_channel(int fd);
-    void handle_registry_global(struct wl_registry *registry, uint32_t name, const char *interface,
-        uint32_t version);
-    void handle_registry_global_remove(struct wl_registry *registry, uint32_t name);
-    void handle_xdg_surface_configure(struct xdg_surface *surface, uint32_t serial);
-    void handle_xdg_toplevel_configure(struct xdg_toplevel *toplevel, int32_t width, int32_t height,
+    void handle_registry_global(struct wl_registry *registry, uint32_t name,
+        const char *interface, uint32_t version);
+    void handle_registry_global_remove(struct wl_registry *registry,
+        uint32_t name);
+    void handle_xdg_surface_configure(struct xdg_surface *surface,
+        uint32_t serial);
+    void handle_xdg_toplevel_configure(struct xdg_toplevel *toplevel,
+        int32_t width, int32_t height,
         struct wl_array *states);
     void handle_xdg_toplevel_close(struct xdg_toplevel *toplevel);
-    void handle_surface_enter(struct wl_surface *surface, struct wl_output *output);
-    void handle_surface_leave(struct wl_surface *surface, struct wl_output *output);
+    void handle_surface_enter(struct wl_surface *surface,
+        struct wl_output *output);
+    void handle_surface_leave(struct wl_surface *surface,
+        struct wl_output *output);
 
     // Wayland Data Device protocol handlers
     void bind_data_device();
     void handle_data_offer(struct wl_data_offer *offer);
     void handle_selection(struct wl_data_offer *offer);
-    void handle_offer_mime_type(struct wl_data_offer *offer, const char *mime_type);
-    void handle_data_source_send(struct wl_data_source *source, const char *mime_type, int32_t fd);
+    void handle_offer_mime_type(struct wl_data_offer *offer,
+        const char *mime_type);
+    void handle_data_source_send(struct wl_data_source *source,
+        const char *mime_type, int32_t fd);
     void handle_data_source_cancelled(struct wl_data_source *source);
 
   private:
@@ -224,6 +233,7 @@ class WaylandWindow
     bool running_    = true;
     bool fullscreen_ = false;
     bool maximized_  = false;
+    bool activated_  = false;
     int repeat_timer_fd_ = -1;
     std::function<void()> on_repeat_timer_;
 };

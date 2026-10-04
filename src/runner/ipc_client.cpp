@@ -1,12 +1,11 @@
 #include "ipc_client.hpp"
 
 #include <cerrno>
+#include <cinttypes>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
 
 IpcClient::IpcClient()
 {}
@@ -46,12 +45,21 @@ void IpcClient::close()
         fd_ = -1;
     }
 
+    for (auto & pair : pending_requests_)
+    {
+        if (pair.second.callback)
+        {
+            simdjson::dom::element err_elem;
+            pair.second.callback(false, err_elem);
+        }
+    }
+
     pending_requests_.clear();
     read_buffer_.clear();
 }
 
 void IpcClient::send_request(const std::string & method,
-    const rapidjson::Document & params,
+    const std::string & params_json,
     ResponseCallback callback)
 {
     if (fd_ < 0)
@@ -60,11 +68,8 @@ void IpcClient::send_request(const std::string & method,
         fflush(stdout);
         if (callback)
         {
-            rapidjson::Document err;
-            err.SetObject();
-            auto & alloc = err.GetAllocator();
-            err.AddMember("error", "IPC client not connected", alloc);
-            callback(false, err);
+            simdjson::dom::element err_elem;
+            callback(false, err_elem);
         }
 
         return;
@@ -76,24 +81,9 @@ void IpcClient::send_request(const std::string & method,
         pending_requests_[id] = {std::move(callback)};
     }
 
-    rapidjson::StringBuffer s;
-    rapidjson::Writer<rapidjson::StringBuffer> writer(s);
-    writer.StartObject();
-    writer.Key("jsonrpc");
-    writer.String("2.0");
-    writer.Key("id");
-    writer.Int64(id);
-    writer.Key("method");
-    writer.String(method.c_str());
-    writer.Key("params");
-
-    // Write params object directly
-    params.Accept(writer);
-
-    writer.EndObject();
-
-    std::string msg = s.GetString();
-    msg += '\n';
+    std::string msg = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) +
+        ",\"method\":\"" + method + "\",\"params\":" +
+        (params_json.empty() ? "{}" : params_json) + "}\n";
 
     printf("[sparrow-ipc-client] Sending request id=%" PRId64 " method='%s' to fd %d (%zu bytes)\n",
         id, method.c_str(), fd_, msg.size());
@@ -112,11 +102,8 @@ void IpcClient::send_request(const std::string & method,
             pending_requests_.erase(it);
             if (cb)
             {
-                rapidjson::Document err;
-                err.SetObject();
-                auto & alloc = err.GetAllocator();
-                err.AddMember("error", "Write failed", alloc);
-                cb(false, err);
+                simdjson::dom::element err_elem;
+                cb(false, err_elem);
             }
         }
     }
@@ -124,9 +111,7 @@ void IpcClient::send_request(const std::string & method,
 
 void IpcClient::send_request(const std::string & method, ResponseCallback callback)
 {
-    rapidjson::Document empty_params;
-    empty_params.SetObject();
-    send_request(method, empty_params, std::move(callback));
+    send_request(method, "{}", std::move(callback));
 }
 
 void IpcClient::dispatch_read()
@@ -136,27 +121,31 @@ void IpcClient::dispatch_read()
         return;
     }
 
-    char buffer[4096];
+    char buf[4096];
     while (true)
     {
-        ssize_t bytes_read = read(fd_, buffer, sizeof(buffer));
-        if (bytes_read > 0)
+        ssize_t n = read(fd_, buf, sizeof(buf));
+        if (n > 0)
         {
-            read_buffer_.append(buffer, bytes_read);
-        } else if ((bytes_read < 0) && ((errno == EAGAIN) || (errno == EWOULDBLOCK)))
+            read_buffer_.append(buf, static_cast<size_t>(n));
+        } else if (n == 0)
         {
-            break;
-        } else if ((bytes_read < 0) && (errno == EINTR))
-        {
-            continue;
-        } else
-        {
-            // Server closed connection or error
-            printf("[sparrow-ipc-client] Connection closed or read error on fd %d (read=%zd, errno=%d: %s)\n",
-                fd_, bytes_read, errno, strerror(errno));
+            printf("[sparrow-ipc-client] Compositor closed IPC connection\n");
             fflush(stdout);
             close();
-            return;
+            break;
+        } else
+        {
+            if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+            {
+                break;
+            }
+
+            printf("[sparrow-ipc-client] read error on fd %d: %s (errno=%d)\n",
+                fd_, strerror(errno), errno);
+            fflush(stdout);
+            close();
+            break;
         }
     }
 
@@ -165,7 +154,7 @@ void IpcClient::dispatch_read()
 
 void IpcClient::process_lines()
 {
-    size_t newline_pos;
+    size_t newline_pos = 0;
     while ((newline_pos = read_buffer_.find('\n')) != std::string::npos)
     {
         std::string line = read_buffer_.substr(0, newline_pos);
@@ -183,49 +172,61 @@ void IpcClient::handle_json_line(const std::string & line)
     printf("[sparrow-ipc-client] Received IPC line: %s\n", line.c_str());
     fflush(stdout);
 
-    rapidjson::Document doc;
-    doc.Parse(line.c_str());
+    auto doc_res = parser_.parse_unpadded(line);
 
-    if (doc.HasParseError() || !doc.IsObject())
+    if (doc_res.error() || !doc_res.value().is_object())
     {
-        printf("[sparrow-ipc-client] JSON parse error on received line\n");
+        printf("[sparrow-ipc-client] JSON parse error on received line: %s\n",
+            simdjson::error_message(doc_res.error()));
         fflush(stdout);
         return;
     }
 
-    if (doc.HasMember("id") && doc["id"].IsInt64())
+    auto doc    = doc_res.value();
+    auto id_res = doc["id"];
+    if (!id_res.error() && (id_res.value().is_int64() || id_res.value().is_uint64()))
     {
-        int64_t id = doc["id"].GetInt64();
+        int64_t id = id_res.value().get_int64().value();
         auto it    = pending_requests_.find(id);
         if (it != pending_requests_.end())
         {
             auto cb = std::move(it->second.callback);
             pending_requests_.erase(it);
 
-            if (doc.HasMember("error") && !doc["error"].IsNull())
+            auto err_res = doc["error"];
+            if (!err_res.error() && !err_res.value().is_null())
             {
-                cb(false, doc["error"]);
-            } else if (doc.HasMember("result"))
-            {
-                cb(true, doc["result"]);
+                cb(false, err_res.value());
             } else
             {
-                rapidjson::Value null_val;
-                cb(true, null_val);
+                auto res = doc["result"];
+                if (!res.error())
+                {
+                    cb(true, res.value());
+                } else
+                {
+                    simdjson::dom::element null_elem;
+                    cb(true, null_elem);
+                }
             }
         }
-    } else if (doc.HasMember("method") && doc["method"].IsString())
+    } else
     {
-        if (on_notification_)
+        auto method_res = doc["method"];
+        if (!method_res.error() && method_res.value().is_string())
         {
-            const std::string & method = doc["method"].GetString();
-            if (doc.HasMember("params"))
+            if (on_notification_)
             {
-                on_notification_(method, doc["params"]);
-            } else
-            {
-                rapidjson::Value null_params;
-                on_notification_(method, null_params);
+                std::string method(method_res.value().get_string().value());
+                auto params_res = doc["params"];
+                if (!params_res.error())
+                {
+                    on_notification_(method, params_res.value());
+                } else
+                {
+                    simdjson::dom::element null_params;
+                    on_notification_(method, null_params);
+                }
             }
         }
     }

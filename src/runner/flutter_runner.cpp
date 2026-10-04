@@ -3,86 +3,115 @@
 #include "vulkan_window.hpp"
 #include "wayland_window.hpp"
 
+#include "client_wrapper/json_method_codec.h"
+#include "client_wrapper/standard_method_codec.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <optional>
-#include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
-
 #include <flutter/platform/runner/pigeon/messages.h>
+#include <optional>
+#include <simdjson.h>
 
 class SparrowRunnerHostIpcApi : public sparrow::RunnerHostIpcApi
 {
   public:
     void GetCompositorInfo(
-        std::function<void(sparrow::ErrorOr<std::optional<sparrow::CompositorSystemInfoData>> reply)> result)
-    override
+        std::function<void(
+            sparrow::ErrorOr<std::optional<sparrow::CompositorSystemInfoData>>
+            reply)>
+        result) override
     {
-        printf("[sparrow-app-runner] Pigeon IPC [sparrow/ipc]: getCompositorInfo\n");
+        printf(
+            "[sparrow-app-runner] Pigeon IPC [sparrow/ipc]: getCompositorInfo\n");
         fflush(stdout);
 
         const auto client = FlutterRunner::instance()->get_ipc_client();
         if ((client == nullptr) || !client->is_connected())
         {
-            result(sparrow::ErrorOr<std::optional<sparrow::CompositorSystemInfoData>>(std::nullopt));
+            result(sparrow::ErrorOr<std::optional<sparrow::CompositorSystemInfoData>>(
+                std::nullopt));
             return;
         }
 
-        rapidjson::Document params;
-        params.SetObject();
-
-        client->send_request("getCompositorInfo", params,
-            [result] (bool success, const rapidjson::Value & val)
+        client->send_request(
+            "getCompositorInfo",
+            [result] (bool success, const simdjson::dom::element & val)
         {
-            printf("[sparrow-app-runner] getCompositorInfo IPC response: success=%d, isObject=%d\n",
-                success, val.IsObject());
+            printf("[sparrow-app-runner] getCompositorInfo IPC response: "
+                   "success=%d, isObject=%d\n",
+                success, success && val.is_object());
             fflush(stdout);
 
-            if (!success || !val.IsObject())
+            if (!success || !val.is_object())
             {
-                result(sparrow::ErrorOr<std::optional<sparrow::CompositorSystemInfoData>>(std::nullopt));
+                result(sparrow::ErrorOr<
+                    std::optional<sparrow::CompositorSystemInfoData>>(
+                        std::nullopt));
                 return;
             }
 
-            std::string compositor = (val.HasMember("compositor") && val["compositor"].IsString()) ?
-                val["compositor"].GetString() :
-                "";
-            std::string version = (val.HasMember("version") && val["version"].IsString()) ?
-                val["version"].GetString() :
-                "";
-            std::string ipc_channel = (val.HasMember("ipc_channel") && val["ipc_channel"].IsString()) ?
-                val["ipc_channel"].GetString() :
-                "";
-            int64_t surfaces_count = (val.HasMember("surfaces_count") && val["surfaces_count"].IsNumber()) ?
-                val["surfaces_count"].GetInt64() :
-                0;
-            double client_fps = (val.HasMember("client_fps") && val["client_fps"].IsNumber()) ?
-                val["client_fps"].GetDouble() :
-                0.0;
-            int64_t peer_pid = (val.HasMember("peer_pid") && val["peer_pid"].IsNumber()) ?
-                val["peer_pid"].GetInt64() :
-                0;
-            std::string app_id = (val.HasMember("app_id") && val["app_id"].IsString()) ?
-                val["app_id"].GetString() :
-                "";
+            auto get_str = [] (const simdjson::dom::element & el, const char *key) -> std::string
+            {
+                auto res = el[key];
+                if (!res.error() && res.is_string())
+                {
+                    auto s = res.get_string();
+                    if (!s.error())
+                    {
+                        return std::string(s.value());
+                    }
+                }
+
+                return "";
+            };
+            auto get_i64 = [] (const simdjson::dom::element & el, const char *key) -> int64_t
+            {
+                auto res = el[key];
+                if (!res.error())
+                {
+                    int64_t v = 0;
+                    if (res.get(v) == simdjson::SUCCESS)
+                    {
+                        return v;
+                    }
+                }
+
+                return 0;
+            };
+            auto get_double = [] (const simdjson::dom::element & el, const char *key) -> double
+            {
+                auto res = el[key];
+                if (!res.error())
+                {
+                    double v = 0.0;
+                    if (res.get(v) == simdjson::SUCCESS)
+                    {
+                        return v;
+                    }
+                }
+
+                return 0.0;
+            };
+
+            std::string compositor  = get_str(val, "compositor");
+            std::string version     = get_str(val, "version");
+            std::string ipc_channel = get_str(val, "ipc_channel");
+            int64_t surfaces_count  = get_i64(val, "surfaces_count");
+            double client_fps  = get_double(val, "client_fps");
+            int64_t peer_pid   = get_i64(val, "peer_pid");
+            std::string app_id = get_str(val, "app_id");
 
             result(std::make_optional(sparrow::CompositorSystemInfoData(
-                compositor,
-                version,
-                ipc_channel,
-                surfaces_count,
-                client_fps,
-                peer_pid,
-                app_id)));
+                compositor, version, ipc_channel, surfaces_count, client_fps,
+                peer_pid, app_id)));
         });
     }
 
     void PingCompositor(
-        std::function<void(sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>> reply)> result)
-    override
+        std::function<void(
+            sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>> reply)>
+        result) override
     {
         printf("[sparrow-app-runner] Pigeon IPC [sparrow/ipc]: ping\n");
         fflush(stdout);
@@ -92,43 +121,56 @@ class SparrowRunnerHostIpcApi : public sparrow::RunnerHostIpcApi
         {
             printf("[sparrow-app-runner] pingCompositor: IPC client not connected\n");
             fflush(stdout);
-            result(sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>>(std::nullopt));
+            result(sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>>(
+                std::nullopt));
             return;
         }
 
-        rapidjson::Document params;
-        params.SetObject();
-
-        client->send_request("ping", params,
-            [result] (bool success, const rapidjson::Value & val)
+        client->send_request(
+            "ping", [result] (bool success, const simdjson::dom::element & val)
         {
-            printf("[sparrow-app-runner] pingCompositor IPC response: success=%d, isObject=%d\n",
-                success, val.IsObject());
+            printf("[sparrow-app-runner] pingCompositor IPC response: "
+                   "success=%d, isObject=%d\n",
+                success, success && val.is_object());
             fflush(stdout);
 
-            if (!success || !val.IsObject())
+            if (!success || !val.is_object())
             {
-                result(sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>>(std::nullopt));
+                result(sparrow::ErrorOr<std::optional<sparrow::CompositorPongData>>(
+                    std::nullopt));
                 return;
             }
 
-            bool pong = (val.HasMember("pong") && val["pong"].IsBool()) ? val["pong"].GetBool() : false;
-            int64_t timestamp_us = (val.HasMember("timestamp_us") && val["timestamp_us"].IsNumber()) ?
-                val["timestamp_us"].GetInt64() :
-                0;
-            int64_t peer_pid = (val.HasMember("peer_pid") && val["peer_pid"].IsNumber()) ?
-                val["peer_pid"].GetInt64() :
-                0;
+            bool pong     = false;
+            auto pong_res = val["pong"];
+            if (!pong_res.error() && pong_res.is_bool())
+            {
+                pong = pong_res.get_bool().value();
+            }
 
-            result(std::make_optional(sparrow::CompositorPongData(
-                pong,
-                timestamp_us,
-                peer_pid)));
+            int64_t timestamp_us = 0;
+            auto ts_res = val["timestamp_us"];
+            if (!ts_res.error())
+            {
+                (void)ts_res.get(timestamp_us);
+            }
+
+            int64_t peer_pid = 0;
+            auto pid_res     = val["peer_pid"];
+            if (!pid_res.error())
+            {
+                (void)pid_res.get(peer_pid);
+            }
+
+            result(std::make_optional(
+                sparrow::CompositorPongData(pong, timestamp_us, peer_pid)));
         });
     }
 
     void ListSurfaces(
-        std::function<void(sparrow::ErrorOr<std::optional<::flutter::EncodableList>> reply)> result) override
+        std::function<
+            void(sparrow::ErrorOr<std::optional<::flutter::EncodableList>> reply)>
+        result) override
     {
         printf("[sparrow-app-runner] Pigeon IPC [sparrow/ipc]: listSurfaces\n");
         fflush(stdout);
@@ -136,62 +178,84 @@ class SparrowRunnerHostIpcApi : public sparrow::RunnerHostIpcApi
         const auto client = FlutterRunner::instance()->get_ipc_client();
         if ((client == nullptr) || !client->is_connected())
         {
-            result(sparrow::ErrorOr<std::optional<::flutter::EncodableList>>(std::nullopt));
+            result(sparrow::ErrorOr<std::optional<::flutter::EncodableList>>(
+                std::nullopt));
             return;
         }
 
-        rapidjson::Document params;
-        params.SetObject();
-
-        client->send_request("listSurfaces", params,
-            [result] (bool success, const rapidjson::Value & val)
+        client->send_request(
+            "listSurfaces",
+            [result] (bool success, const simdjson::dom::element & val)
         {
-            if (!success || !val.IsArray())
+            if (!success || !val.is_array())
             {
-                result(sparrow::ErrorOr<std::optional<::flutter::EncodableList>>(std::nullopt));
+                result(sparrow::ErrorOr<std::optional<::flutter::EncodableList>>(
+                    std::nullopt));
                 return;
             }
 
-            ::flutter::EncodableList surfaces_list;
-            for (const auto & item : val.GetArray())
+            auto get_str = [] (const simdjson::dom::element & el, const char *key) -> std::string
             {
-                if (item.IsObject())
+                auto res = el[key];
+                if (!res.error() && res.is_string())
                 {
-                    std::string title = (item.HasMember("title") && item["title"].IsString()) ?
-                        item["title"].GetString() :
-                        "";
-                    int64_t handle = (item.HasMember("handle") && item["handle"].IsNumber()) ?
-                        item["handle"].GetInt64() :
-                        0;
-                    std::string app_id = (item.HasMember("app_id") && item["app_id"].IsString()) ?
-                        item["app_id"].GetString() :
-                        "";
-                    int64_t width = (item.HasMember("width") && item["width"].IsNumber()) ?
-                        item["width"].GetInt64() :
-                        0;
-                    int64_t height = (item.HasMember("height") && item["height"].IsNumber()) ?
-                        item["height"].GetInt64() :
-                        0;
-                    bool fullscreen = (item.HasMember("fullscreen") && item["fullscreen"].IsBool()) ?
-                        item["fullscreen"].GetBool() :
-                        false;
-                    bool maximized = (item.HasMember("maximized") && item["maximized"].IsBool()) ?
-                        item["maximized"].GetBool() :
-                        false;
-                    bool activated = (item.HasMember("activated") && item["activated"].IsBool()) ?
-                        item["activated"].GetBool() :
-                        false;
+                    auto s = res.get_string();
+                    if (!s.error())
+                    {
+                        return std::string(s.value());
+                    }
+                }
+
+                return "";
+            };
+            auto get_i64 = [] (const simdjson::dom::element & el, const char *key) -> int64_t
+            {
+                auto res = el[key];
+                if (!res.error())
+                {
+                    int64_t v = 0;
+                    if (res.get(v) == simdjson::SUCCESS)
+                    {
+                        return v;
+                    }
+                }
+
+                return 0;
+            };
+            auto get_bool = [] (const simdjson::dom::element & el, const char *key) -> bool
+            {
+                auto res = el[key];
+                if (!res.error() && res.is_bool())
+                {
+                    bool v = false;
+                    if (res.get(v) == simdjson::SUCCESS)
+                    {
+                        return v;
+                    }
+                }
+
+                return false;
+            };
+
+            ::flutter::EncodableList surfaces_list;
+            for (const auto & item : val.get_array().value())
+            {
+                if (item.is_object())
+                {
+                    std::string title  = get_str(item, "title");
+                    int64_t handle     = get_i64(item, "handle");
+                    std::string app_id = get_str(item, "app_id");
+                    int64_t width   = get_i64(item, "width");
+                    int64_t height  = get_i64(item, "height");
+                    bool fullscreen = get_bool(item, "fullscreen");
+                    bool maximized  = get_bool(item, "maximized");
+                    bool activated  = get_bool(item, "activated");
 
                     sparrow::CompositorSurfaceData surface_data(
-                        title,
-                        handle,
-                        app_id,
-                        width,
-                        height,
-                        fullscreen,
-                        maximized,
+                        title, handle, app_id, width, height, fullscreen, maximized,
                         activated);
-                    surfaces_list.push_back(::flutter::CustomEncodableValue(surface_data));
+                    surfaces_list.push_back(
+                        ::flutter::CustomEncodableValue(surface_data));
                 }
             }
 
@@ -213,20 +277,22 @@ class SparrowRunnerHostIpcApi : public sparrow::RunnerHostIpcApi
             return;
         }
 
-        rapidjson::Document params;
-        params.SetObject();
-        params.AddMember("handle", handle, params.GetAllocator());
+        std::string params = "{\"handle\":" + std::to_string(handle) + "}";
 
         client->send_request("closeSurface", params,
-            [result] (bool success, const rapidjson::Value & val)
+            [result] (bool success, const simdjson::dom::element & val)
         {
-            if (success && val.IsObject() && val.HasMember("closed") && val["closed"].IsBool())
+            if (success && val.is_object())
             {
-                result(val["closed"].GetBool());
-            } else
-            {
-                result(success);
+                auto closed_res = val["closed"];
+                if (!closed_res.error() && closed_res.is_bool())
+                {
+                    result(closed_res.get_bool().value());
+                    return;
+                }
             }
+
+            result(success);
         });
     }
 };
@@ -234,35 +300,31 @@ class SparrowRunnerHostIpcApi : public sparrow::RunnerHostIpcApi
 class SparrowRunnerHostApi : public sparrow::RunnerHostApi
 {
   public:
-
     void GetSystemInfo(
-        std::function<void(sparrow::ErrorOr<std::optional<sparrow::RunnerSystemInfoData>> reply)> result)
-    override
+        std::function<void(
+            sparrow::ErrorOr<std::optional<sparrow::RunnerSystemInfoData>> reply)>
+        result) override
     {
         auto window = FlutterRunner::instance()->get_window();
         if (window == nullptr)
         {
-            result(sparrow::ErrorOr<std::optional<sparrow::RunnerSystemInfoData>>(std::nullopt));
+            result(sparrow::ErrorOr<std::optional<sparrow::RunnerSystemInfoData>>(
+                std::nullopt));
             return;
         }
 
         const char *wayland_display = getenv("WAYLAND_DISPLAY");
         sparrow::RunnerSystemInfoData system_info_data(
-            "sparrow-app-runner",
-            "0.2.0",
+            "sparrow-app-runner", "0.2.0",
             wayland_display != nullptr ? std::string(wayland_display) : "",
-            window->get_width(),
-            window->get_height(),
-            window->get_pixel_ratio(),
-            window->is_fullscreen(),
-            window->is_maximized(),
-            window->get_title(),
-            window->get_app_id()
-        );
+            window->get_width(), window->get_height(), window->get_pixel_ratio(),
+            window->is_fullscreen(), window->is_maximized(), window->get_title(),
+            window->get_app_id());
         result(std::make_optional(system_info_data));
     }
 
-    void SetWindowTitle(const std::string& title,
+    void SetWindowTitle(
+        const std::string & title,
         std::function<void(sparrow::ErrorOr<bool> reply)> result) override
     {
         auto window = FlutterRunner::instance()->get_window();
@@ -276,7 +338,9 @@ class SparrowRunnerHostApi : public sparrow::RunnerHostApi
         result(true);
     }
 
-    void SetFullscreen(bool enabled, std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+    void SetFullscreen(
+        bool enabled,
+        std::function<void(sparrow::ErrorOr<bool> reply)> result) override
     {
         auto window = FlutterRunner::instance()->get_window();
         if (!window)
@@ -289,7 +353,9 @@ class SparrowRunnerHostApi : public sparrow::RunnerHostApi
         result(true);
     }
 
-    void SetMaximized(bool enabled, std::function<void(sparrow::ErrorOr<bool> reply)> result) override
+    void SetMaximized(
+        bool enabled,
+        std::function<void(sparrow::ErrorOr<bool> reply)> result) override
     {
         auto window = FlutterRunner::instance()->get_window();
         if (!window)
@@ -315,7 +381,8 @@ class SparrowRunnerHostApi : public sparrow::RunnerHostApi
         result(true);
     }
 
-    void Ping(std::function<void(sparrow::ErrorOr<sparrow::RunnerPongData> reply)> result) override
+    void Ping(std::function<void(sparrow::ErrorOr<sparrow::RunnerPongData> reply)>
+        result) override
     {
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -344,11 +411,10 @@ FlutterRunner*FlutterRunner::instance()
 }
 
 FlutterRunner::FlutterRunner(WaylandWindow *window, InputManager *input_manager,
-    RendererBackend backend, bool enable_vk_validation, VkPresentModeKHR preferred_present_mode) :
-    backend_(backend),
-    enable_vk_validation_(enable_vk_validation),
-    preferred_present_mode_(preferred_present_mode),
-    window_(window),
+    RendererBackend backend, bool enable_vk_validation,
+    VkPresentModeKHR preferred_present_mode) :
+    backend_(backend), enable_vk_validation_(enable_vk_validation),
+    preferred_present_mode_(preferred_present_mode), window_(window),
     input_manager_(input_manager)
 {
     _instance.store(this, std::memory_order_release);
@@ -366,7 +432,8 @@ void FlutterRunner::on_platform_message(const FlutterPlatformMessage *message)
         return;
     }
 
-    printf("[sparrow-app-runner] Incoming PlatformMessage on channel: '%s'\n", message->channel);
+    printf("[sparrow-app-runner] Incoming PlatformMessage on channel: '%s'\n",
+        message->channel);
     fflush(stdout);
 
     if (message_dispatcher_ && message_dispatcher_->HandleMessage(*message))
@@ -377,7 +444,8 @@ void FlutterRunner::on_platform_message(const FlutterPlatformMessage *message)
     // Acknowledge unhandled message with empty response to unblock Dart Futures
     if (message->response_handle)
     {
-        embedder_api_.SendPlatformMessageResponse(engine_, message->response_handle, nullptr, 0);
+        embedder_api_.SendPlatformMessageResponse(engine_, message->response_handle,
+            nullptr, 0);
     }
 }
 
@@ -389,7 +457,9 @@ bool FlutterRunner::init(const std::string & assets_path,
     embedder_api_.struct_size = sizeof(FlutterEngineProcTable);
     if (FlutterEngineGetProcAddresses(&embedder_api_) != kSuccess)
     {
-        fprintf(stderr, "[sparrow-app-runner] Failed to get Flutter engine proc addresses\n");
+        fprintf(
+            stderr,
+            "[sparrow-app-runner] Failed to get Flutter engine proc addresses\n");
         return false;
     }
 
@@ -399,10 +469,10 @@ bool FlutterRunner::init(const std::string & assets_path,
         vulkan_window_ = std::make_unique<VulkanWindow>();
         if (!vulkan_window_->init(window_->get_display(), window_->get_surface(),
             window_->get_width(), window_->get_height(),
-            enable_vk_validation_,
-            preferred_present_mode_))
+            enable_vk_validation_, preferred_present_mode_))
         {
-            fprintf(stderr, "[sparrow-app-runner] Failed to initialize Vulkan window\n");
+            fprintf(stderr,
+                "[sparrow-app-runner] Failed to initialize Vulkan window\n");
             return false;
         }
 
@@ -418,28 +488,33 @@ bool FlutterRunner::init(const std::string & assets_path,
         renderer_config.vulkan.struct_size = sizeof(FlutterVulkanRendererConfig);
         renderer_config.vulkan.version     = VK_API_VERSION_1_2;
         renderer_config.vulkan.instance    = vulkan_window_->get_instance();
-        renderer_config.vulkan.physical_device = vulkan_window_->get_physical_device();
+        renderer_config.vulkan.physical_device =
+            vulkan_window_->get_physical_device();
         renderer_config.vulkan.device = vulkan_window_->get_device();
-        renderer_config.vulkan.queue_family_index = vulkan_window_->get_queue_family_index();
+        renderer_config.vulkan.queue_family_index =
+            vulkan_window_->get_queue_family_index();
         renderer_config.vulkan.queue = vulkan_window_->get_queue();
         renderer_config.vulkan.enabled_instance_extension_count =
             vulkan_window_->get_enabled_instance_extensions().size();
         renderer_config.vulkan.enabled_instance_extensions =
-            const_cast<const char**>(vulkan_window_->get_enabled_instance_extensions().data());
+            const_cast<const char**>(
+                vulkan_window_->get_enabled_instance_extensions().data());
         renderer_config.vulkan.enabled_device_extension_count =
             vulkan_window_->get_enabled_device_extensions().size();
         renderer_config.vulkan.enabled_device_extensions =
-            const_cast<const char**>(vulkan_window_->get_enabled_device_extensions().data());
-        renderer_config.vulkan.get_instance_proc_address_callback = VulkanWindow::get_instance_proc_address;
-        renderer_config.vulkan.get_next_image_callback = [] (void *user_data,
-                                                             const FlutterFrameInfo *frame_info) ->
-            FlutterVulkanImage
+            const_cast<const char**>(
+                vulkan_window_->get_enabled_device_extensions().data());
+        renderer_config.vulkan.get_instance_proc_address_callback =
+            VulkanWindow::get_instance_proc_address;
+        renderer_config.vulkan.get_next_image_callback =
+            [] (void *user_data,
+                const FlutterFrameInfo *frame_info) -> FlutterVulkanImage
         {
             auto *self = static_cast<FlutterRunner*>(user_data);
             return self->vulkan_window_->get_next_image(frame_info);
         };
-        renderer_config.vulkan.present_image_callback = [] (void *user_data,
-                                                            const FlutterVulkanImage *image) -> bool
+        renderer_config.vulkan.present_image_callback =
+            [] (void *user_data, const FlutterVulkanImage *image) -> bool
         {
             auto *self = static_cast<FlutterRunner*>(user_data);
             return self->vulkan_window_->present_image(image);
@@ -468,7 +543,8 @@ bool FlutterRunner::init(const std::string & assets_path,
             (void)user_data;
             return 0; // Default window framebuffer
         };
-        renderer_config.open_gl.make_resource_current = [] (void *user_data) -> bool
+        renderer_config.open_gl.make_resource_current =
+            [] (void *user_data) -> bool
         {
             auto *self = static_cast<FlutterRunner*>(user_data);
             return self->window_->make_resource_current();
@@ -500,28 +576,32 @@ bool FlutterRunner::init(const std::string & assets_path,
     project_args.icu_data_path = icu_data_path.c_str();
     project_args.command_line_argc = static_cast<int>(argv_ptrs.size());
     project_args.command_line_argv = argv_ptrs.data();
-    project_args.platform_message_callback = [] (const FlutterPlatformMessage *msg, void *user_data)
+    project_args.platform_message_callback = [] (const FlutterPlatformMessage *msg,
+                                                 void *user_data)
     {
         auto *self = static_cast<FlutterRunner*>(user_data);
         self->on_platform_message(msg);
     };
 
-    project_args.log_message_callback = [] (const char *tag, const char *message, void *user_data)
+    project_args.log_message_callback = [] (const char *tag, const char *message,
+                                            void *user_data)
     {
         (void)user_data;
         printf("[DART] [%s] %s\n", tag ? tag : "flutter", message ? message : "");
         fflush(stdout);
     };
 
-    main_thread_id_ = pthread_self();
+    main_thread_id_ = std::this_thread::get_id();
     platform_task_runner_.struct_size = sizeof(FlutterTaskRunnerDescription);
     platform_task_runner_.user_data   = this;
-    platform_task_runner_.runs_task_on_current_thread_callback = [] (void *user_data) -> bool
+    platform_task_runner_.runs_task_on_current_thread_callback =
+        [] (void *user_data) -> bool
     {
         auto *self = static_cast<FlutterRunner*>(user_data);
-        return pthread_equal(pthread_self(), self->main_thread_id_) != 0;
+        return std::this_thread::get_id() == self->main_thread_id_;
     };
-    platform_task_runner_.post_task_callback = [] (FlutterTask task, uint64_t target_time, void *user_data)
+    platform_task_runner_.post_task_callback =
+        [] (FlutterTask task, uint64_t target_time, void *user_data)
     {
         auto *self = static_cast<FlutterRunner*>(user_data);
         std::scoped_lock lock(self->task_mutex_);
@@ -541,7 +621,8 @@ bool FlutterRunner::init(const std::string & assets_path,
 
         if (FlutterEngineCreateAOTData(&aot_source, &aot_data_) != kSuccess)
         {
-            fprintf(stderr, "[sparrow-app-runner] FlutterEngineCreateAOTData failed for %s\n",
+            fprintf(stderr,
+                "[sparrow-app-runner] FlutterEngineCreateAOTData failed for %s\n",
                 aot_elf_path.c_str());
             return false;
         }
@@ -550,7 +631,8 @@ bool FlutterRunner::init(const std::string & assets_path,
     }
 
     // Prepare client wrapper dispatcher
-    message_dispatcher_ = std::make_unique<IncomingMessageDispatcher>(&messenger_);
+    message_dispatcher_ =
+        std::make_unique<IncomingMessageDispatcher>(&messenger_);
     messenger_.SetMessageDispatcher(message_dispatcher_.get());
 
     const FlutterEngineResult run_result = embedder_api_.Run(
@@ -558,7 +640,9 @@ bool FlutterRunner::init(const std::string & assets_path,
 
     if ((run_result != kSuccess) || !engine_)
     {
-        fprintf(stderr, "[sparrow-app-runner] FlutterEngineRun failed with code: %d\n", run_result);
+        fprintf(stderr,
+            "[sparrow-app-runner] FlutterEngineRun failed with code: %d\n",
+            run_result);
         return false;
     }
 
@@ -568,6 +652,10 @@ bool FlutterRunner::init(const std::string & assets_path,
     if (window_)
     {
         window_->set_ipc_client(&ipc_client_);
+        window_->on_window_activated = [this] (bool activated)
+        {
+            set_window_active(activated);
+        };
         window_->on_ipc_fd_received = [this] (int fd)
         {
             ipc_client_.set_fd(fd);
@@ -583,7 +671,8 @@ bool FlutterRunner::init(const std::string & assets_path,
     init_platform_channels();
 
     // Send initial window metrics
-    send_window_metrics(window_->get_width(), window_->get_height(), window_->get_pixel_ratio());
+    send_window_metrics(window_->get_width(), window_->get_height(),
+        window_->get_pixel_ratio());
 
     return true;
 }
@@ -591,27 +680,36 @@ bool FlutterRunner::init(const std::string & assets_path,
 void FlutterRunner::init_platform_channels()
 {
     // 1. flutter/platform channel for clipboard & system navigator
-    platform_channel_ = std::make_unique<flutter::MethodChannel<rapidjson::Document>>(
-        &messenger_, "flutter/platform", &flutter::JsonMethodCodec::GetInstance());
+    platform_channel_ =
+        std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+            &messenger_, "flutter/platform",
+            &flutter::JsonMethodCodec::GetInstance());
 
-    platform_channel_->SetMethodCallHandler([this] (const flutter::MethodCall<rapidjson::Document> & call,
-                                                    std::unique_ptr<flutter::MethodResult<rapidjson::Document>>
-                                                    result)
+    platform_channel_->SetMethodCallHandler(
+        [this] (
+            const flutter::MethodCall<flutter::EncodableValue> & call,
+            std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
     {
         const std::string & method = call.method_name();
-        printf("[sparrow-app-runner] MethodChannel [flutter/platform]: %s\n", method.c_str());
+        printf("[sparrow-app-runner] MethodChannel [flutter/platform]: %s\n",
+            method.c_str());
         fflush(stdout);
 
         if (method == "Clipboard.setData")
         {
             const auto *args = call.arguments();
-            if (args && args->IsObject() && args->HasMember("text") && (*args)["text"].IsString())
+            if (args && std::holds_alternative<flutter::EncodableMap>(*args))
             {
-                std::string text = (*args)["text"].GetString();
-                clipboard_text_  = text;
-                if (window_)
+                const auto & map = std::get<flutter::EncodableMap>(*args);
+                auto text_it     = map.find(flutter::EncodableValue("text"));
+                if ((text_it != map.end()) && std::holds_alternative<std::string>(text_it->second))
                 {
-                    window_->set_clipboard_text(text);
+                    std::string text = std::get<std::string>(text_it->second);
+                    clipboard_text_  = text;
+                    if (window_)
+                    {
+                        window_->set_clipboard_text(text);
+                    }
                 }
             }
 
@@ -625,13 +723,9 @@ void FlutterRunner::init_platform_channels()
                 clipboard_text_ = text;
             }
 
-            rapidjson::Document response;
-            response.SetObject();
-            rapidjson::Value text_val;
-            text_val.SetString(text.c_str(),
-                static_cast<rapidjson::SizeType>(text.length()), response.GetAllocator());
-            response.AddMember("text", text_val, response.GetAllocator());
-            result->Success(response);
+            flutter::EncodableMap response;
+            response[flutter::EncodableValue("text")] = flutter::EncodableValue(text);
+            result->Success(flutter::EncodableValue(std::move(response)));
         } else if (method == "Clipboard.hasStrings")
         {
             bool has_str = !clipboard_text_.empty();
@@ -640,17 +734,17 @@ void FlutterRunner::init_platform_channels()
                 has_str = window_->has_clipboard_text();
             }
 
-            rapidjson::Document response;
-            response.SetObject();
-            response.AddMember("value", has_str, response.GetAllocator());
-            result->Success(response);
+            flutter::EncodableMap response;
+            response[flutter::EncodableValue("value")] = flutter::EncodableValue(has_str);
+            result->Success(flutter::EncodableValue(std::move(response)));
         } else if (method == "SystemNavigator.pop")
         {
             window_->request_close();
             result->Success();
         } else if ((method == "SystemSound.play") ||
                    (method == "System.initializationComplete") ||
-                   (method == "SystemChrome.setApplicationSwitcherDescription") ||
+                   (method ==
+                    "SystemChrome.setApplicationSwitcherDescription") ||
                    (method == "SystemChrome.setSystemUIOverlayStyle") ||
                    (method == "LiveText.isLiveTextInputAvailable"))
         {
@@ -662,47 +756,64 @@ void FlutterRunner::init_platform_channels()
     });
 
     // 2. flutter/textinput channel for text input editing
-    text_input_channel_ = std::make_unique<flutter::MethodChannel<rapidjson::Document>>(
-        &messenger_, "flutter/textinput", &flutter::JsonMethodCodec::GetInstance());
+    text_input_channel_ =
+        std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+            &messenger_, "flutter/textinput",
+            &flutter::JsonMethodCodec::GetInstance());
 
-    text_input_channel_->SetMethodCallHandler([this] (const flutter::MethodCall<rapidjson::Document> & call,
-                                                      std::unique_ptr<flutter::MethodResult<rapidjson::
-            Document>> result)
+    text_input_channel_->SetMethodCallHandler(
+        [this] (
+            const flutter::MethodCall<flutter::EncodableValue> & call,
+            std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result)
     {
         const std::string & method = call.method_name();
 
         if (method == "TextInput.setClient")
         {
             const auto *args = call.arguments();
-            if (args && args->IsArray() && (args->Size() >= 2))
+            if (args && std::holds_alternative<flutter::EncodableList>(*args))
             {
-                const auto & arr = args->GetArray();
-                text_input_state_.active    = true;
-                text_input_state_.client_id = arr[0].GetInt64();
-                text_input_state_.text.clear();
-                text_input_state_.selection_base   = 0;
-                text_input_state_.selection_extent = 0;
-                text_input_state_.composing_base   = -1;
-                text_input_state_.composing_extent = -1;
-                text_input_state_.multiline    = false;
-                text_input_state_.input_action = "TextInputAction.done";
-
-                if (arr[1].IsObject())
+                const auto & arr = std::get<flutter::EncodableList>(*args);
+                if (arr.size() >= 2)
                 {
-                    const auto & config = arr[1].GetObject();
-                    if (config.HasMember("inputAction") && config["inputAction"].IsString())
+                    text_input_state_.active = true;
+                    if (std::holds_alternative<int32_t>(arr[0]) || std::holds_alternative<int64_t>(arr[0]))
                     {
-                        text_input_state_.input_action = config["inputAction"].GetString();
+                        text_input_state_.client_id = arr[0].LongValue();
                     }
 
-                    if (config.HasMember("inputType") && config["inputType"].IsObject())
+                    text_input_state_.text.clear();
+                    text_input_state_.selection_base   = 0;
+                    text_input_state_.selection_extent = 0;
+                    text_input_state_.composing_base   = -1;
+                    text_input_state_.composing_extent = -1;
+                    text_input_state_.multiline    = false;
+                    text_input_state_.input_action = "TextInputAction.done";
+
+                    if (std::holds_alternative<flutter::EncodableMap>(arr[1]))
                     {
-                        const auto & input_type = config["inputType"].GetObject();
-                        if (input_type.HasMember("name") && input_type["name"].IsString())
+                        const auto & config = std::get<flutter::EncodableMap>(arr[1]);
+                        auto action_it = config.find(flutter::EncodableValue("inputAction"));
+                        if ((action_it != config.end()) &&
+                            std::holds_alternative<std::string>(action_it->second))
                         {
-                            if (strstr(input_type["name"].GetString(), "multiline"))
+                            text_input_state_.input_action = std::get<std::string>(action_it->second);
+                        }
+
+                        auto type_it = config.find(flutter::EncodableValue("inputType"));
+                        if ((type_it != config.end()) &&
+                            std::holds_alternative<flutter::EncodableMap>(type_it->second))
+                        {
+                            const auto & input_type = std::get<flutter::EncodableMap>(type_it->second);
+                            auto name_it = input_type.find(flutter::EncodableValue("name"));
+                            if ((name_it != input_type.end()) &&
+                                std::holds_alternative<std::string>(name_it->second))
                             {
-                                text_input_state_.multiline = true;
+                                if (std::get<std::string>(name_it->second).find("multiline") !=
+                                    std::string::npos)
+                                {
+                                    text_input_state_.multiline = true;
+                                }
                             }
                         }
                     }
@@ -713,26 +824,35 @@ void FlutterRunner::init_platform_channels()
         } else if (method == "TextInput.setEditingState")
         {
             const auto *args = call.arguments();
-            if (args && args->IsObject())
+            if (args && std::holds_alternative<flutter::EncodableMap>(*args))
             {
-                const auto & state = args->GetObject();
-                if (state.HasMember("text") && state["text"].IsString())
+                const auto & state = std::get<flutter::EncodableMap>(*args);
+                auto text_it = state.find(flutter::EncodableValue("text"));
+                if ((text_it != state.end()) && std::holds_alternative<std::string>(text_it->second))
                 {
-                    text_input_state_.text = state["text"].GetString();
+                    text_input_state_.text = std::get<std::string>(text_it->second);
                 }
 
-                if (state.HasMember("selectionBase") && state["selectionBase"].IsInt())
+                auto base_it = state.find(flutter::EncodableValue("selectionBase"));
+                if ((base_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(base_it->second) ||
+                     std::holds_alternative<int64_t>(base_it->second)))
                 {
-                    text_input_state_.selection_base = state["selectionBase"].GetInt();
+                    text_input_state_.selection_base = static_cast<int32_t>(base_it->second.LongValue());
                 }
 
-                if (state.HasMember("selectionExtent") && state["selectionExtent"].IsInt())
+                auto ext_it = state.find(flutter::EncodableValue("selectionExtent"));
+                if ((ext_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(ext_it->second) ||
+                     std::holds_alternative<int64_t>(ext_it->second)))
                 {
-                    text_input_state_.selection_extent = state["selectionExtent"].GetInt();
+                    text_input_state_.selection_extent = static_cast<int32_t>(ext_it->second.LongValue());
                 }
 
-                int32_t text_len = static_cast<int32_t>(text_input_state_.text.length());
-                if ((text_input_state_.selection_base < 0) || (text_input_state_.selection_base > text_len))
+                int32_t text_len =
+                    static_cast<int32_t>(text_input_state_.text.length());
+                if ((text_input_state_.selection_base < 0) ||
+                    (text_input_state_.selection_base > text_len))
                 {
                     text_input_state_.selection_base = text_len;
                 }
@@ -740,17 +860,24 @@ void FlutterRunner::init_platform_channels()
                 if ((text_input_state_.selection_extent < 0) ||
                     (text_input_state_.selection_extent > text_len))
                 {
-                    text_input_state_.selection_extent = text_input_state_.selection_base;
+                    text_input_state_.selection_extent =
+                        text_input_state_.selection_base;
                 }
 
-                if (state.HasMember("composingBase") && state["composingBase"].IsInt())
+                auto comp_b_it = state.find(flutter::EncodableValue("composingBase"));
+                if ((comp_b_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(comp_b_it->second) ||
+                     std::holds_alternative<int64_t>(comp_b_it->second)))
                 {
-                    text_input_state_.composing_base = state["composingBase"].GetInt();
+                    text_input_state_.composing_base = static_cast<int32_t>(comp_b_it->second.LongValue());
                 }
 
-                if (state.HasMember("composingExtent") && state["composingExtent"].IsInt())
+                auto comp_e_it = state.find(flutter::EncodableValue("composingExtent"));
+                if ((comp_e_it != state.end()) &&
+                    (std::holds_alternative<int32_t>(comp_e_it->second) ||
+                     std::holds_alternative<int64_t>(comp_e_it->second)))
                 {
-                    text_input_state_.composing_extent = state["composingExtent"].GetInt();
+                    text_input_state_.composing_extent = static_cast<int32_t>(comp_e_it->second.LongValue());
                 }
             }
 
@@ -761,7 +888,8 @@ void FlutterRunner::init_platform_channels()
             text_input_state_.client_id = 0;
             text_input_state_.text.clear();
             result->Success();
-        } else if ((method == "TextInput.show") || (method == "TextInput.hide") ||
+        } else if ((method == "TextInput.show") ||
+                   (method == "TextInput.hide") ||
                    (method == "TextInput.setEditableSizeAndTransform") ||
                    (method == "TextInput.setMarkedTextRect") ||
                    (method == "TextInput.setStyle") ||
@@ -777,7 +905,8 @@ void FlutterRunner::init_platform_channels()
     });
 
     // Hook input manager keyboard typing to text input model
-    input_manager_->on_key_event = [this] (xkb_keysym_t keysym, uint32_t unicode, bool pressed)
+    input_manager_->on_key_event = [this] (xkb_keysym_t keysym, uint32_t unicode,
+                                           bool pressed)
     {
         handle_text_input_key(keysym, unicode, pressed);
     };
@@ -785,28 +914,33 @@ void FlutterRunner::init_platform_channels()
     // 3. sparrow system pigeon APIs
     runner_host_api_ = std::make_unique<SparrowRunnerHostApi>();
     sparrow::RunnerHostApi::SetUp(&messenger_, runner_host_api_.get());
-    // pigeon_flutter_api = std::make_unique<sparrow::RunnerFlutterApi>(&messenger_);
+    // pigeon_flutter_api =
+    // std::make_unique<sparrow::RunnerFlutterApi>(&messenger_);
 
     // 4. flutter/mousecursor channel
-    mouse_cursor_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-        &messenger_, "flutter/mousecursor", &flutter::StandardMethodCodec::GetInstance());
+    mouse_cursor_channel_ =
+        std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+            &messenger_, "flutter/mousecursor",
+            &flutter::StandardMethodCodec::GetInstance());
 
     mouse_cursor_channel_->SetMethodCallHandler(
         [this] (const flutter::MethodCall<flutter::EncodableValue> & call,
-                std::unique_ptr<flutter::MethodResult<flutter::
-            EncodableValue>>
+                std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
                 result)
     {
         const std::string & method = call.method_name();
         if (method == "activateSystemCursor")
         {
-            const auto *args = std::get_if<flutter::EncodableMap>(call.arguments());
+            const auto *args =
+                std::get_if<flutter::EncodableMap>(call.arguments());
             if (args)
             {
                 auto kind_it = args->find(flutter::EncodableValue("kind"));
-                if ((kind_it != args->end()) && std::holds_alternative<std::string>(kind_it->second))
+                if ((kind_it != args->end()) &&
+                    std::holds_alternative<std::string>(kind_it->second))
                 {
-                    const std::string & flutter_kind = std::get<std::string>(kind_it->second);
+                    const std::string & flutter_kind =
+                        std::get<std::string>(kind_it->second);
                     if (input_manager_)
                     {
                         input_manager_->set_cursor(flutter_kind);
@@ -815,7 +949,8 @@ void FlutterRunner::init_platform_channels()
             }
 
             result->Success();
-        } else if ((method == "createSystemCursor") || (method == "deleteSystemCursor"))
+        } else if ((method == "createSystemCursor") ||
+                   (method == "deleteSystemCursor"))
         {
             result->Success();
         } else
@@ -828,40 +963,158 @@ void FlutterRunner::init_platform_channels()
     runner_host_ipc_api_ = std::make_unique<SparrowRunnerHostIpcApi>();
     sparrow::RunnerHostIpcApi::SetUp(&messenger_, runner_host_ipc_api_.get());
 
-    runner_flutter_ipc_api_ = std::make_unique<sparrow::RunnerFlutterIpcApi>(&messenger_);
+    runner_flutter_ipc_api_ =
+        std::make_unique<sparrow::RunnerFlutterIpcApi>(&messenger_);
 
-    ipc_client_.set_notification_handler([this] (const std::string & method, const rapidjson::Value & params)
+    ipc_client_.set_notification_handler(
+        [this] (const std::string & method, const simdjson::dom::element & params)
     {
-        printf("[sparrow-app-runner] Compositor notification: %s\n", method.c_str());
+        printf("[sparrow-app-runner] Compositor notification: %s\n",
+            method.c_str());
         fflush(stdout);
+
+        if (method == "displayPower")
+        {
+            if (params.is_object())
+            {
+                auto p_res = params["powered_on"];
+                if (!p_res.error() && p_res.is_bool())
+                {
+                    bool powered = p_res.get_bool().value();
+                    set_display_powered(powered);
+                }
+            }
+        }
 
         std::string params_json;
         const std::string *params_json_ptr = nullptr;
-        if (!params.IsNull())
+        if (!params.is_null())
         {
-            rapidjson::StringBuffer buffer;
-            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
-            params.Accept(writer);
-            params_json     = buffer.GetString();
+            params_json     = simdjson::to_string(params);
             params_json_ptr = &params_json;
         }
 
         if (runner_flutter_ipc_api_)
         {
             runner_flutter_ipc_api_->OnNotification(
-                method,
-                params_json_ptr,
-                [] () {},
+                method, params_json_ptr, [] () {},
                 [] (const sparrow::FlutterError & error)
             {
-                fprintf(stderr, "[sparrow-app-runner] Error forwarding notification to Flutter: %s\n",
+                fprintf(stderr,
+                    "[sparrow-app-runner] Error forwarding notification to "
+                    "Flutter: %s\n",
                     error.message().c_str());
             });
         }
     });
 }
 
-void FlutterRunner::send_window_metrics(int32_t width, int32_t height, double pixel_ratio)
+void FlutterRunner::send_lifecycle_state(const char *state_str)
+{
+    if (!engine_)
+    {
+        return;
+    }
+
+    printf("[sparrow-app-runner] [LIFECYCLE] Sent flutter/lifecycle state: %s\n",
+        state_str);
+    fflush(stdout);
+    const uint8_t *data   = reinterpret_cast<const uint8_t*>(state_str);
+    const size_t data_len = strlen(state_str);
+    messenger_.Send("flutter/lifecycle", data, data_len, nullptr);
+}
+
+void FlutterRunner::set_window_active(bool active)
+{
+    if (window_active_ == active)
+    {
+        return;
+    }
+
+    window_active_ = active;
+    printf("[sparrow-app-runner] Window activation changed: %s\n",
+        active ? "ACTIVE" : "INACTIVE");
+    fflush(stdout);
+    update_lifecycle_state();
+}
+
+void FlutterRunner::set_display_powered(bool powered)
+{
+    if (display_powered_ == powered)
+    {
+        return;
+    }
+
+    display_powered_ = powered;
+    printf("[sparrow-app-runner] Display power changed: %s\n",
+        powered ? "ON" : "OFF");
+    fflush(stdout);
+    update_lifecycle_state();
+}
+
+void FlutterRunner::update_lifecycle_state()
+{
+    std::string target_state;
+    if (!display_powered_)
+    {
+        target_state = "AppLifecycleState.paused";
+    } else if (window_active_)
+    {
+        target_state = "AppLifecycleState.resumed";
+    } else
+    {
+        target_state = "AppLifecycleState.inactive";
+    }
+
+    if (current_lifecycle_state_ == target_state)
+    {
+        return;
+    }
+
+    if (target_state == "AppLifecycleState.paused")
+    {
+        if (current_lifecycle_state_ == "AppLifecycleState.resumed")
+        {
+            send_lifecycle_state("AppLifecycleState.inactive");
+            send_lifecycle_state("AppLifecycleState.hidden");
+        } else if (current_lifecycle_state_ == "AppLifecycleState.inactive")
+        {
+            send_lifecycle_state("AppLifecycleState.hidden");
+        }
+
+        send_lifecycle_state("AppLifecycleState.paused");
+    } else if (target_state == "AppLifecycleState.resumed")
+    {
+        if (current_lifecycle_state_ == "AppLifecycleState.paused")
+        {
+            send_lifecycle_state("AppLifecycleState.hidden");
+            send_lifecycle_state("AppLifecycleState.inactive");
+        } else if (current_lifecycle_state_ == "AppLifecycleState.hidden")
+        {
+            send_lifecycle_state("AppLifecycleState.inactive");
+        }
+
+        send_lifecycle_state("AppLifecycleState.resumed");
+    } else if (target_state == "AppLifecycleState.inactive")
+    {
+        if (current_lifecycle_state_ == "AppLifecycleState.paused")
+        {
+            send_lifecycle_state("AppLifecycleState.hidden");
+            send_lifecycle_state("AppLifecycleState.inactive");
+        } else if (current_lifecycle_state_ == "AppLifecycleState.hidden")
+        {
+            send_lifecycle_state("AppLifecycleState.inactive");
+        } else if (current_lifecycle_state_ == "AppLifecycleState.resumed")
+        {
+            send_lifecycle_state("AppLifecycleState.inactive");
+        }
+    }
+
+    current_lifecycle_state_ = target_state;
+}
+
+void FlutterRunner::send_window_metrics(int32_t width, int32_t height,
+    double pixel_ratio)
 {
     if (!engine_ || (width <= 0) || (height <= 0))
     {
@@ -886,8 +1139,8 @@ void FlutterRunner::process_tasks()
         return;
     }
 
-    const uint64_t current_time_nanos = embedder_api_.GetCurrentTime ?
-        embedder_api_.GetCurrentTime() : 0;
+    const uint64_t current_time_nanos =
+        embedder_api_.GetCurrentTime ? embedder_api_.GetCurrentTime() : 0;
 
     std::vector<FlutterTask> ready_tasks;
     {
@@ -925,6 +1178,7 @@ void FlutterRunner::shutdown()
 {
     if (engine_)
     {
+        send_lifecycle_state("AppLifecycleState.detached");
         printf("[sparrow-app-runner] Calling FlutterEngineShutdown...\n");
         fflush(stdout);
         messenger_.SetEngine(nullptr, nullptr);
@@ -952,7 +1206,8 @@ void FlutterRunner::shutdown()
     }
 }
 
-void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode, bool pressed)
+void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
+    bool pressed)
 {
     if (!text_input_state_.active || !pressed)
     {
@@ -960,12 +1215,14 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
     }
 
     int32_t text_len = static_cast<int32_t>(text_input_state_.text.length());
-    if ((text_input_state_.selection_base < 0) || (text_input_state_.selection_base > text_len))
+    if ((text_input_state_.selection_base < 0) ||
+        (text_input_state_.selection_base > text_len))
     {
         text_input_state_.selection_base = text_len;
     }
 
-    if ((text_input_state_.selection_extent < 0) || (text_input_state_.selection_extent > text_len))
+    if ((text_input_state_.selection_extent < 0) ||
+        (text_input_state_.selection_extent > text_len))
     {
         text_input_state_.selection_extent = text_input_state_.selection_base;
     }
@@ -977,7 +1234,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
     {
         if ((keysym == XKB_KEY_c) || (keysym == XKB_KEY_C))
         {
-            if (text_input_state_.selection_base != text_input_state_.selection_extent)
+            if (text_input_state_.selection_base !=
+                text_input_state_.selection_extent)
             {
                 int32_t start = std::min(text_input_state_.selection_base,
                     text_input_state_.selection_extent);
@@ -996,7 +1254,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
 
         if ((keysym == XKB_KEY_x) || (keysym == XKB_KEY_X))
         {
-            if (text_input_state_.selection_base != text_input_state_.selection_extent)
+            if (text_input_state_.selection_base !=
+                text_input_state_.selection_extent)
             {
                 int32_t start = std::min(text_input_state_.selection_base,
                     text_input_state_.selection_extent);
@@ -1029,7 +1288,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
             {
                 text_input_state_.delete_selection();
                 text_input_state_.text.insert(text_input_state_.selection_base, paste);
-                text_input_state_.selection_base  += static_cast<int32_t>(paste.length());
+                text_input_state_.selection_base +=
+                    static_cast<int32_t>(paste.length());
                 text_input_state_.selection_extent = text_input_state_.selection_base;
                 send_editing_state();
             }
@@ -1040,7 +1300,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         if ((keysym == XKB_KEY_a) || (keysym == XKB_KEY_A))
         {
             text_input_state_.selection_base   = 0;
-            text_input_state_.selection_extent = static_cast<int32_t>(text_input_state_.text.length());
+            text_input_state_.selection_extent =
+                static_cast<int32_t>(text_input_state_.text.length());
             send_editing_state();
             return;
         }
@@ -1051,7 +1312,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
     switch (keysym)
     {
       case XKB_KEY_BackSpace:
-        if (text_input_state_.selection_base != text_input_state_.selection_extent)
+        if (text_input_state_.selection_base !=
+            text_input_state_.selection_extent)
         {
             text_input_state_.delete_selection();
             changed = true;
@@ -1059,7 +1321,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         {
             int32_t pos = text_input_state_.selection_base - 1;
             while ((pos > 0) &&
-                   ((static_cast<unsigned char>(text_input_state_.text[pos]) & 0xC0) == 0x80))
+                   ((static_cast<unsigned char>(text_input_state_.text[pos]) &
+                     0xC0) == 0x80))
             {
                 pos--;
             }
@@ -1073,15 +1336,18 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         break;
 
       case XKB_KEY_Delete:
-        if (text_input_state_.selection_base != text_input_state_.selection_extent)
+        if (text_input_state_.selection_base !=
+            text_input_state_.selection_extent)
         {
             text_input_state_.delete_selection();
             changed = true;
-        } else if (text_input_state_.selection_base < static_cast<int32_t>(text_input_state_.text.length()))
+        } else if (text_input_state_.selection_base <
+                   static_cast<int32_t>(text_input_state_.text.length()))
         {
             int32_t pos = text_input_state_.selection_base + 1;
             while ((pos < static_cast<int32_t>(text_input_state_.text.length())) &&
-                   ((static_cast<unsigned char>(text_input_state_.text[pos]) & 0xC0) == 0x80))
+                   ((static_cast<unsigned char>(text_input_state_.text[pos]) &
+                     0xC0) == 0x80))
             {
                 pos++;
             }
@@ -1098,7 +1364,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         {
             int32_t pos = text_input_state_.selection_extent - 1;
             while ((pos > 0) &&
-                   ((static_cast<unsigned char>(text_input_state_.text[pos]) & 0xC0) == 0x80))
+                   ((static_cast<unsigned char>(text_input_state_.text[pos]) &
+                     0xC0) == 0x80))
             {
                 pos--;
             }
@@ -1115,11 +1382,13 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         break;
 
       case XKB_KEY_Right:
-        if (text_input_state_.selection_extent < static_cast<int32_t>(text_input_state_.text.length()))
+        if (text_input_state_.selection_extent <
+            static_cast<int32_t>(text_input_state_.text.length()))
         {
             int32_t pos = text_input_state_.selection_extent + 1;
             while ((pos < static_cast<int32_t>(text_input_state_.text.length())) &&
-                   ((static_cast<unsigned char>(text_input_state_.text[pos]) & 0xC0) == 0x80))
+                   ((static_cast<unsigned char>(text_input_state_.text[pos]) &
+                     0xC0) == 0x80))
             {
                 pos++;
             }
@@ -1146,7 +1415,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         break;
 
       case XKB_KEY_End:
-        text_input_state_.selection_extent = static_cast<int32_t>(text_input_state_.text.length());
+        text_input_state_.selection_extent =
+            static_cast<int32_t>(text_input_state_.text.length());
         if (!shift_active)
         {
             text_input_state_.selection_base = text_input_state_.selection_extent;
@@ -1167,7 +1437,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
         } else
         {
             perform_action(text_input_state_.input_action.empty() ?
-                "TextInputAction.done" : text_input_state_.input_action);
+                "TextInputAction.done" :
+                text_input_state_.input_action);
         }
 
         break;
@@ -1205,7 +1476,8 @@ void FlutterRunner::handle_text_input_key(xkb_keysym_t keysym, uint32_t unicode,
             }
 
             text_input_state_.delete_selection();
-            text_input_state_.text.insert(text_input_state_.selection_base, utf8, len);
+            text_input_state_.text.insert(text_input_state_.selection_base, utf8,
+                len);
             text_input_state_.selection_base  += len;
             text_input_state_.selection_extent = text_input_state_.selection_base;
             changed = true;
@@ -1227,25 +1499,26 @@ void FlutterRunner::send_editing_state()
         return;
     }
 
-    rapidjson::Document doc;
-    auto & allocator = doc.GetAllocator();
-    doc.SetArray();
+    flutter::EncodableMap state;
+    state[flutter::EncodableValue("text")] = flutter::EncodableValue(text_input_state_.text);
+    state[flutter::EncodableValue("selectionBase")] =
+        flutter::EncodableValue(text_input_state_.selection_base);
+    state[flutter::EncodableValue("selectionExtent")] =
+        flutter::EncodableValue(text_input_state_.selection_extent);
+    state[flutter::EncodableValue("selectionAffinity")] = flutter::EncodableValue("TextAffinity.downstream");
+    state[flutter::EncodableValue("selectionIsDirectional")] = flutter::EncodableValue(false);
+    state[flutter::EncodableValue("composingBase")] =
+        flutter::EncodableValue(text_input_state_.composing_base);
+    state[flutter::EncodableValue("composingExtent")] =
+        flutter::EncodableValue(text_input_state_.composing_extent);
 
-    doc.PushBack(rapidjson::Value(static_cast<int64_t>(text_input_state_.client_id)), allocator);
+    flutter::EncodableList list;
+    list.push_back(flutter::EncodableValue(static_cast<int64_t>(text_input_state_.client_id)));
+    list.push_back(flutter::EncodableValue(std::move(state)));
 
-    rapidjson::Value state(rapidjson::kObjectType);
-    state.AddMember("text", rapidjson::Value(text_input_state_.text.c_str(), allocator), allocator);
-    state.AddMember("selectionBase", text_input_state_.selection_base, allocator);
-    state.AddMember("selectionExtent", text_input_state_.selection_extent, allocator);
-    state.AddMember("selectionAffinity", "TextAffinity.downstream", allocator);
-    state.AddMember("selectionIsDirectional", false, allocator);
-    state.AddMember("composingBase", text_input_state_.composing_base, allocator);
-    state.AddMember("composingExtent", text_input_state_.composing_extent, allocator);
-
-    doc.PushBack(state, allocator);
-
-    text_input_channel_->InvokeMethod("TextInputClient.updateEditingState",
-        std::make_unique<rapidjson::Document>(std::move(doc)));
+    text_input_channel_->InvokeMethod(
+        "TextInputClient.updateEditingState",
+        std::make_unique<flutter::EncodableValue>(std::move(list)));
 }
 
 void FlutterRunner::perform_action(const std::string & action)
@@ -1255,13 +1528,11 @@ void FlutterRunner::perform_action(const std::string & action)
         return;
     }
 
-    rapidjson::Document doc;
-    auto & allocator = doc.GetAllocator();
-    doc.SetArray();
+    flutter::EncodableList list;
+    list.push_back(flutter::EncodableValue(static_cast<int64_t>(text_input_state_.client_id)));
+    list.push_back(flutter::EncodableValue(action));
 
-    doc.PushBack(rapidjson::Value(static_cast<int64_t>(text_input_state_.client_id)), allocator);
-    doc.PushBack(rapidjson::Value(action.c_str(), allocator), allocator);
-
-    text_input_channel_->InvokeMethod("TextInputClient.performAction",
-        std::make_unique<rapidjson::Document>(std::move(doc)));
+    text_input_channel_->InvokeMethod(
+        "TextInputClient.performAction",
+        std::make_unique<flutter::EncodableValue>(std::move(list)));
 }

@@ -1,8 +1,8 @@
 #include "surface_message.hpp"
 #include "flutter/platform/engine/callbacks/surface_callback.hpp"
+#include "output.hpp"
 #include <core.hpp>
 #include <surface/view.hpp>
-
 void send_surface_title(SparrowView *view)
 {
     Core *instance = Core::instance();
@@ -15,10 +15,7 @@ void send_surface_title(SparrowView *view)
     const char *app_id = view->toplevel->app_id;
 
     instance->pigeon_flutter_api->SurfaceTitle(
-        view->handle,
-        title ? title : "",
-        app_id ? app_id : "",
-        [] () {},
+        view->handle, title ? title : "", app_id ? app_id : "", [] () {},
         [] (const sparrow::FlutterError & err)
     {
         wlr_log(WLR_ERROR, "surface_title error: %s", err.message().c_str());
@@ -28,7 +25,8 @@ void send_surface_title(SparrowView *view)
 void send_surface_map(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->pigeon_flutter_api || !view || !view->xdg_surface)
+    if (!instance || !instance->pigeon_flutter_api || !view ||
+        !view->xdg_surface)
     {
         return;
     }
@@ -44,9 +42,13 @@ void send_surface_map(SparrowView *view)
         "Decoration mode: uses_ssd=%d, uses_csd=%d, geo_offset=(%d,%d)",
         view->uses_ssd, uses_csd, view->geo_x, view->geo_y);
 
-    // Get actual buffer dimensions (includes shadow area for CSD apps)
-    const int buffer_width  = view->xdg_surface->surface->current.width;
-    const int buffer_height = view->xdg_surface->surface->current.height;
+    // Get actual buffer dimensions (includes shadow area for CSD apps and viewport buffer size)
+    const int buffer_width = (view->xdg_surface->surface->current.buffer_width > 0) ?
+        view->xdg_surface->surface->current.buffer_width :
+        view->xdg_surface->surface->current.width;
+    const int buffer_height = (view->xdg_surface->surface->current.buffer_height > 0) ?
+        view->xdg_surface->surface->current.buffer_height :
+        view->xdg_surface->surface->current.height;
 
     int32_t min_w = 0, max_w = 0, min_h = 0, max_h = 0;
     if (view->toplevel != nullptr)
@@ -58,39 +60,61 @@ void send_surface_map(SparrowView *view)
     }
 
     auto map = flutter::EncodableMap{
-        {flutter::EncodableValue("handle"), flutter::EncodableValue((int64_t)view->handle)},
-        {flutter::EncodableValue("texture_id"), flutter::EncodableValue((int64_t)view->texture_id)},
+        {flutter::EncodableValue("handle"),
+            flutter::EncodableValue((int64_t)view->handle)},
+        {flutter::EncodableValue("texture_id"),
+            flutter::EncodableValue((int64_t)view->texture_id)},
         {flutter::EncodableValue("x"), flutter::EncodableValue((int64_t)view->x)},
         {flutter::EncodableValue("y"), flutter::EncodableValue((int64_t)view->y)},
-        {flutter::EncodableValue("width"), flutter::EncodableValue((int64_t)view->width)},
-        {flutter::EncodableValue("height"), flutter::EncodableValue((int64_t)view->height)},
-        {flutter::EncodableValue("buffer_width"), flutter::EncodableValue((int64_t)buffer_width)},
-        {flutter::EncodableValue("buffer_height"), flutter::EncodableValue((int64_t)buffer_height)},
-        {flutter::EncodableValue("geo_x"), flutter::EncodableValue((int64_t)view->geo_x)},
-        {flutter::EncodableValue("geo_y"), flutter::EncodableValue((int64_t)view->geo_y)},
-        {flutter::EncodableValue("client_pid"), flutter::EncodableValue((int64_t)pid)},
-        {flutter::EncodableValue("client_uid"), flutter::EncodableValue((int64_t)uid)},
-        {flutter::EncodableValue("client_gid"), flutter::EncodableValue((int64_t)gid)},
+        {flutter::EncodableValue("width"),
+            flutter::EncodableValue((int64_t)view->width)},
+        {flutter::EncodableValue("height"),
+            flutter::EncodableValue((int64_t)view->height)},
+        {flutter::EncodableValue("buffer_width"),
+            flutter::EncodableValue((int64_t)buffer_width)},
+        {flutter::EncodableValue("buffer_height"),
+            flutter::EncodableValue((int64_t)buffer_height)},
+        {flutter::EncodableValue("geo_x"),
+            flutter::EncodableValue((int64_t)view->geo_x)},
+        {flutter::EncodableValue("geo_y"),
+            flutter::EncodableValue((int64_t)view->geo_y)},
+        {flutter::EncodableValue("client_pid"),
+            flutter::EncodableValue((int64_t)pid)},
+        {flutter::EncodableValue("client_uid"),
+            flutter::EncodableValue((int64_t)uid)},
+        {flutter::EncodableValue("client_gid"),
+            flutter::EncodableValue((int64_t)gid)},
         {flutter::EncodableValue("title"),
-            flutter::EncodableValue((view->toplevel && view->toplevel->title) ? view->toplevel->title : "")},
+            flutter::EncodableValue((view->toplevel && view->toplevel->title) ?
+                view->toplevel->title :
+                "")},
         {flutter::EncodableValue("app_id"),
-            flutter::EncodableValue((view->toplevel &&
-                view->toplevel->app_id) ? view->toplevel->app_id : "")},
-        {flutter::EncodableValue("maximized"), flutter::EncodableValue((int64_t)(view->maximized ? 1 : 0))},
-        {flutter::EncodableValue("activated"), flutter::EncodableValue((int64_t)(view->activated ? 1 : 0))},
-        {flutter::EncodableValue("uses_csd"), flutter::EncodableValue((int64_t)(uses_csd ? 1 : 0))},
+            flutter::EncodableValue((view->toplevel && view->toplevel->app_id) ?
+                view->toplevel->app_id :
+                "")},
+        {flutter::EncodableValue("maximized"),
+            flutter::EncodableValue((int64_t)(view->maximized ? 1 : 0))},
+        {flutter::EncodableValue("activated"),
+            flutter::EncodableValue((int64_t)(view->activated ? 1 : 0))},
+        {flutter::EncodableValue("uses_csd"),
+            flutter::EncodableValue((int64_t)(uses_csd ? 1 : 0))},
         {flutter::EncodableValue("output_id"),
-            flutter::EncodableValue((int64_t)(view->current_output ? view->current_output->id : 0))},
-        {flutter::EncodableValue("output_scale"), flutter::EncodableValue(view->output_scale)},
-        {flutter::EncodableValue("min_width"), flutter::EncodableValue((int64_t)min_w)},
-        {flutter::EncodableValue("max_width"), flutter::EncodableValue((int64_t)max_w)},
-        {flutter::EncodableValue("min_height"), flutter::EncodableValue((int64_t)min_h)},
-        {flutter::EncodableValue("max_height"), flutter::EncodableValue((int64_t)max_h)},
+            flutter::EncodableValue(
+                (int64_t)(view->current_output ? view->current_output->id : 0))},
+        {flutter::EncodableValue("output_scale"),
+            flutter::EncodableValue(view->output_scale)},
+        {flutter::EncodableValue("min_width"),
+            flutter::EncodableValue((int64_t)min_w)},
+        {flutter::EncodableValue("max_width"),
+            flutter::EncodableValue((int64_t)max_w)},
+        {flutter::EncodableValue("min_height"),
+            flutter::EncodableValue((int64_t)min_h)},
+        {flutter::EncodableValue("max_height"),
+            flutter::EncodableValue((int64_t)max_h)},
     };
 
     instance->pigeon_flutter_api->SurfaceMap(
-        map,
-        [] () {},
+        map, [] () {},
         [] (const sparrow::FlutterError & err)
     {
         wlr_log(WLR_ERROR, "surface_map error: %s", err.message().c_str());
@@ -175,8 +199,7 @@ void send_surface_unmap(uint32_t handle)
     }
 
     instance->pigeon_flutter_api->SurfaceUnmap(
-        handle,
-        [] () {},
+        handle, [] () {},
         [] (const sparrow::FlutterError & err)
     {
         wlr_log(WLR_ERROR, "surface_unmap error: %s", err.message().c_str());
@@ -186,23 +209,23 @@ void send_surface_unmap(uint32_t handle)
 void send_surface_geometry(SparrowView *view)
 {
     Core *instance = Core::instance();
-    if (!instance || !instance->pigeon_flutter_api || !view || !view->xdg_surface ||
-        !view->xdg_surface->surface)
+    if (!instance || !instance->pigeon_flutter_api || !view ||
+        !view->xdg_surface || !view->xdg_surface->surface)
     {
         return;
     }
 
     struct wlr_surface *surface = view->xdg_surface->surface;
+    const int buffer_width = (surface->current.buffer_width > 0) ?
+        surface->current.buffer_width :
+        surface->current.width;
+    const int buffer_height = (surface->current.buffer_height > 0) ?
+        surface->current.buffer_height :
+        surface->current.height;
 
     instance->pigeon_flutter_api->SurfaceGeometry(
-        view->handle,
-        view->width,
-        view->height,
-        surface->current.width,
-        surface->current.height,
-        view->geo_x,
-        view->geo_y,
-        [] () {},
+        view->handle, view->width, view->height, buffer_width,
+        buffer_height, view->geo_x, view->geo_y, [] () {},
         [] (const sparrow::FlutterError & err)
     {
         wlr_log(WLR_ERROR, "surface_geometry error: %s", err.message().c_str());
@@ -218,16 +241,15 @@ void send_surface_minimize(SparrowView *view)
     }
 
     instance->pigeon_flutter_api->SurfaceMinimize(
-        view->handle,
-        [] () {},
+        view->handle, [] () {},
         [] (const sparrow::FlutterError & err)
     {
         wlr_log(WLR_ERROR, "surface_minimize error: %s", err.message().c_str());
     });
 }
 
-void send_surface_request_activate(uint32_t handle,
-    const char *token, const char *app_id)
+void send_surface_request_activate(uint32_t handle, const char *token,
+    const char *app_id)
 {
     Core *instance = Core::instance();
     if (!instance || !instance->pigeon_flutter_api)
@@ -236,12 +258,10 @@ void send_surface_request_activate(uint32_t handle,
     }
 
     instance->pigeon_flutter_api->SurfaceRequestActivate(
-        handle,
-        token ? token : "",
-        app_id ? app_id : "",
-        [] () {},
+        handle, token ? token : "", app_id ? app_id : "", [] () {},
         [] (const sparrow::FlutterError & err)
     {
-        wlr_log(WLR_ERROR, "surface_request_activate error: %s", err.message().c_str());
+        wlr_log(WLR_ERROR, "surface_request_activate error: %s",
+            err.message().c_str());
     });
 }

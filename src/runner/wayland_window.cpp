@@ -833,6 +833,7 @@ void WaylandWindow::handle_xdg_toplevel_configure(struct xdg_toplevel *toplevel,
     {
         maximized_  = false;
         fullscreen_ = false;
+        bool activated = false;
         const auto *states_data = static_cast<const uint32_t*>(states->data);
         size_t count = states->size / sizeof(uint32_t);
         for (size_t i = 0; i < count; ++i)
@@ -843,6 +844,18 @@ void WaylandWindow::handle_xdg_toplevel_configure(struct xdg_toplevel *toplevel,
             } else if (states_data[i] == XDG_TOPLEVEL_STATE_FULLSCREEN)
             {
                 fullscreen_ = true;
+            } else if (states_data[i] == XDG_TOPLEVEL_STATE_ACTIVATED)
+            {
+                activated = true;
+            }
+        }
+
+        if (activated != activated_)
+        {
+            activated_ = activated;
+            if (on_window_activated)
+            {
+                on_window_activated(activated_);
             }
         }
     }

@@ -1,0 +1,227 @@
+{
+  "description": "Sparrow PGO & Automated Workload Application Suite",
+  "version": "1.0",
+  "default_duration_sec": 5,
+  "inter_app_delay_sec": 0.5,
+  "applications": [
+    {
+      "name": "Pointer Calibrator",
+      "command": "tools/bot/repro_clients/pointer_calibrator --duration 30",
+      "duration": 6,
+      "required": false,
+      "actions": [
+        {
+          "type": "mouse_motion",
+          "pattern": "cross_screen",
+          "steps": 6,
+          "interval": 0.05
+        },
+        {
+          "type": "click",
+          "button": "left"
+        },
+        {
+          "type": "mouse_motion",
+          "pattern": "circle",
+          "radius": 150,
+          "interval": 0.04
+        },
+        {
+          "type": "click",
+          "button": "left"
+        }
+      ]
+    },
+    {
+      "name": "Alacritty Terminal",
+      "command": "alacritty",
+      "duration": 6,
+      "required": false,
+      "actions": [
+        {
+          "type": "keyboard_type",
+          "text": "uname -a\n"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.5
+        },
+        {
+          "type": "keyboard_type",
+          "text": "uptime\n"
+        },
+        {
+          "type": "mouse_motion",
+          "pattern": "cross_screen",
+          "steps": 4,
+          "interval": 0.05
+        },
+        {
+          "type": "click",
+          "button": "left"
+        }
+      ]
+    },
+    {
+      "name": "Vulkan Cube (vkcube)",
+      "command": "vkcube",
+      "duration": 6,
+      "required": false,
+      "actions": [
+        {
+          "type": "mouse_motion",
+          "pattern": "zigzag",
+          "steps": 8,
+          "interval": 0.05
+        },
+        {
+          "type": "click",
+          "button": "left"
+        },
+        {
+          "type": "sleep",
+          "duration": 1.0
+        }
+      ]
+    },
+    {
+      "name": "ARGB Tooltip Client",
+      "command": "tools/bot/repro_clients/repro_tooltip_argb --duration=30",
+      "duration": 5,
+      "required": false,
+      "actions": [
+        {
+          "type": "mouse_motion",
+          "pattern": "cross_screen",
+          "steps": 4,
+          "interval": 0.05
+        },
+        {
+          "type": "click",
+          "button": "left"
+        },
+        {
+          "type": "hotkey",
+          "key": "Right"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.5
+        },
+        {
+          "type": "hotkey",
+          "key": "Left"
+        }
+      ]
+    },
+    {
+      "name": "Subsurface Popup Client",
+      "command": "tools/bot/repro_clients/repro_subsurface_popup --duration=30",
+      "duration": 5,
+      "required": false,
+      "actions": [
+        {
+          "type": "mouse_motion",
+          "x": 180,
+          "y": 60
+        },
+        {
+          "type": "click",
+          "button": "left"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.5
+        },
+        {
+          "type": "click",
+          "button": "left"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.5
+        },
+        {
+          "type": "hotkey",
+          "key": "Alt_L"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.6
+        },
+        {
+          "type": "hotkey",
+          "key": "Return"
+        }
+      ]
+    },
+    {
+      "name": "Weston Terminal",
+      "command": "weston-terminal",
+      "duration": 5,
+      "required": false,
+      "actions": [
+        {
+          "type": "keyboard_type",
+          "text": "echo 'Hello from Sparrow PGO Workload'\n"
+        },
+        {
+          "type": "sleep",
+          "duration": 0.5
+        },
+        {
+          "type": "mouse_motion",
+          "pattern": "cross_screen",
+          "steps": 4,
+          "interval": 0.05
+        }
+      ]
+    },
+    {
+      "name": "Jank & Frame Pacing Monitor",
+      "command": "tools/bot/repro_clients/jank_monitor --duration 30",
+      "duration": 5,
+      "required": false,
+      "actions": [
+        {
+          "type": "mouse_motion",
+          "pattern": "zigzag",
+          "steps": 6,
+          "interval": 0.04
+        },
+        {
+          "type": "click",
+          "button": "left"
+        }
+      ]
+    },
+    {
+      "name": "vkcube",
+      "command": "vkcube",
+      "duration": 60,
+      "required": false,
+      "actions": []
+    },
+    {
+      "name": "vkmark",
+      "command": "vkmark",
+      "duration": 60,
+      "required": false,
+      "actions": []
+    },
+    {
+      "name": "vkgears",
+      "command": "vkgears",
+      "duration": 60,
+      "required": false,
+      "actions": []
+    },
+    {
+      "name": "vkcubepp",
+      "command": "vkcubepp",
+      "duration": 60,
+      "required": false,
+      "actions": []
+    }
+  ]
+}

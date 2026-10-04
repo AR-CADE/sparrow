@@ -14,6 +14,7 @@ function clean() {
     rm -rf subprojects/flutter_embedder/*.md
     rm -rf subprojects/wlroots
     rm -rf subprojects/wleird
+    rm -rf subprojects/simdjson
     rm -rf subprojects/compositor-killer
     rm -rf build-ck
     rm -rf out
@@ -24,6 +25,13 @@ function clean() {
     rm -rf platform/pigeon/runner/cpp/*.g.*
     rm -rf platform/pigeon/runner/gobject/*.g.*
     rm -rf platform/pigeon/runner/pigeon_runner/lib/src/*.g.dart
+    rm -rf tools/bot/repro_clients/jank_monitor
+    rm -rf tools/bot/repro_clients/pointer_calibrator
+    rm -rf tools/bot/repro_clients/repro_subsurface_popup
+    rm -rf tools/bot/repro_clients/repro_tooltip_argb
+    rm -rf tools/bot/repro_clients/sparrow_key
+    rm -rf tools/bot/repro_clients/*.o
+    rm -rf tools/bot/session_lock/*.o
 }
 
 function show_help() {
@@ -411,8 +419,8 @@ function build_out() {
             echo -e "Installed sparrow-app-runner into out/\n"
         fi
         mkdir -p out/shell/lib
-        if [ -f build/subprojects/wlroots/libwlroots-0.20.so ]; then
-            cp -rfp build/subprojects/wlroots/libwlroots-0.20.so out/shell/lib/
+        if [ -f build/subprojects/wlroots/libwlroots-*.so ]; then
+            cp -rfp build/subprojects/wlroots/libwlroots-*.so out/shell/lib/
         fi
         if [ -n "$HOST_PATH" ] && [ -f "$HOST_PATH/libflutter_engine.so" ]; then
             cp -rfp "$HOST_PATH/libflutter_engine.so" out/shell/lib/

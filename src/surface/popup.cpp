@@ -1,12 +1,13 @@
 #include "flutter_embedder.h"
+#include <mutex>
 
 #include "core.hpp"
 #include "flutter/platform/engine/messages/popup_message.hpp"
-#include "view.hpp"
+#include "output.hpp"
 #include "popup.hpp"
-
-
-
+#include "surface.hpp"
+#include "util/handle_map.hpp"
+#include "view.hpp"
 void sparrow_popup_damage_whole(SparrowPopup *popup)
 {
     if (!popup)
@@ -22,27 +23,12 @@ void sparrow_popup_damage_whole(SparrowPopup *popup)
     }
 
     SparrowView *view = popup->parent_view;
-    Output *output    = (view && view->current_output) ? view->current_output : sparrow_get_first_output();
+    Output *output    = (view && view->current_output) ? view->current_output :
+        sparrow_get_first_output();
     if (!output || !output->wlr_output)
     {
         return;
     }
-
-    const int out_w = output->wlr_output->width;
-    const int out_h = output->wlr_output->height;
-
-    const int vis_w = (view && view->width > 0) ? view->width : out_w;
-    const int vis_h = (view && view->height > 0) ? view->height : out_h;
-    const double scale_x = (vis_w > 0) ? ((double)out_w / (double)vis_w) : 1.0;
-    const double scale_y = (vis_h > 0) ? ((double)out_h / (double)vis_h) : 1.0;
-    const double scale   = (scale_x < scale_y) ? scale_x : scale_y;
-
-    const int target_w    = (int)lround(vis_w * scale);
-    const int target_h    = (int)lround(vis_h * scale);
-    const int black_bar_x = (out_w - target_w) / 2;
-    const int black_bar_y = (out_h - target_h) / 2;
-    const int view_x = view ? view->x : 0;
-    const int view_y = view ? view->y : 0;
 
     int w = popup->width > 0 ? popup->width :
         (popup->xdg_surface && popup->xdg_surface->surface ?
@@ -55,11 +41,25 @@ void sparrow_popup_damage_whole(SparrowPopup *popup)
 
     if ((w > 0) && (h > 0))
     {
+        struct wlr_box scene_box = {};
+        int mapped_x = 0, mapped_y = 0;
+        if (view && sparrow_view_get_scene_box(view, &scene_box))
+        {
+            mapped_x = scene_box.x + popup->x;
+            mapped_y = scene_box.y + popup->y;
+        } else
+        {
+            const int view_x = view ? view->x : 0;
+            const int view_y = view ? view->y : 0;
+            mapped_x = view_x + popup->x;
+            mapped_y = view_y + popup->y;
+        }
+
         struct wlr_box box = {
-            .x     = (int)lround(view_x + black_bar_x + popup->x * scale),
-            .y     = (int)lround(view_y + black_bar_y + popup->y * scale),
-            .width = (int)lround(w * scale),
-            .height = (int)lround(h * scale),
+            .x     = mapped_x,
+            .y     = mapped_y,
+            .width = w,
+            .height = h,
         };
         sparrow_damage_add_box(&box, true);
     } else
@@ -93,9 +93,9 @@ static void popup_handle_map(struct wl_listener *listener, void *data)
         }
     }
 
-    // Unconditionally focusing popups here caused browsers (Firefox/Chrome) to drop focus and immediately
-    // unmap popups.
-    // Seat state and activation are maintained without stealing keyboard focus on map.
+    // Unconditionally focusing popups here caused browsers (Firefox/Chrome) to
+    // drop focus and immediately unmap popups. Seat state and activation are
+    // maintained without stealing keyboard focus on map.
 
     sparrow_popup_damage_whole(popup);
 
@@ -134,13 +134,112 @@ static void popup_handle_unmap(struct wl_listener *listener, void *data)
     }
 }
 
-static void popup_handle_scene_tree_destroy(struct wl_listener *listener, void *data)
+static void popup_handle_scene_tree_destroy(struct wl_listener *listener,
+    void *data)
 {
     (void)data;
     SparrowPopup *popup = wl_container_of(listener, popup, scene_tree_destroy);
     popup->scene_tree = nullptr;
     wl_list_remove(&popup->scene_tree_destroy.link);
     wl_list_init(&popup->scene_tree_destroy.link);
+}
+
+static void popup_handle_commit(struct wl_listener *listener, void *data);
+
+struct SparrowPopupSubsurface
+{
+    SparrowPopup *popup;
+    struct wlr_subsurface *wlr_subsurface;
+    struct wl_listener commit;
+    struct wl_listener destroy;
+    struct wl_listener new_subsurface;
+    struct wl_list link;
+};
+
+static void popup_track_subsurface(SparrowPopup *popup,
+    struct wlr_subsurface *wlr_subsurface);
+
+static void popup_subsurface_handle_commit(struct wl_listener *listener,
+    void *data)
+{
+    (void)data;
+    SparrowPopupSubsurface *sub = wl_container_of(listener, sub, commit);
+    popup_handle_commit(&sub->popup->commit, nullptr);
+}
+
+static void popup_subsurface_handle_destroy(struct wl_listener *listener,
+    void *data)
+{
+    (void)data;
+    SparrowPopupSubsurface *sub = wl_container_of(listener, sub, destroy);
+    wl_list_remove(&sub->commit.link);
+    wl_list_remove(&sub->destroy.link);
+    wl_list_remove(&sub->new_subsurface.link);
+    wl_list_remove(&sub->link);
+    delete sub;
+}
+
+static void popup_subsurface_handle_new_child(struct wl_listener *listener,
+    void *data)
+{
+    SparrowPopupSubsurface *sub  = wl_container_of(listener, sub, new_subsurface);
+    struct wlr_subsurface *child = static_cast<struct wlr_subsurface*>(data);
+    popup_track_subsurface(sub->popup, child);
+}
+
+static void popup_track_subsurface(SparrowPopup *popup,
+    struct wlr_subsurface *wlr_subsurface)
+{
+    if (!popup || !wlr_subsurface || !wlr_subsurface->surface)
+    {
+        return;
+    }
+
+    // Check if already tracked
+    SparrowPopupSubsurface *entry;
+    wl_list_for_each(entry, &popup->subsurfaces, link)
+    {
+        if (entry->wlr_subsurface == wlr_subsurface)
+        {
+            return;
+        }
+    }
+
+    auto *sub = new SparrowPopupSubsurface();
+    sub->popup = popup;
+    sub->wlr_subsurface = wlr_subsurface;
+    wl_list_insert(&popup->subsurfaces, &sub->link);
+
+    sub->commit.notify = popup_subsurface_handle_commit;
+    wl_signal_add(&wlr_subsurface->surface->events.commit, &sub->commit);
+
+    sub->destroy.notify = popup_subsurface_handle_destroy;
+    wl_signal_add(&wlr_subsurface->events.destroy, &sub->destroy);
+
+    sub->new_subsurface.notify = popup_subsurface_handle_new_child;
+    wl_signal_add(&wlr_subsurface->surface->events.new_subsurface,
+        &sub->new_subsurface);
+
+    // Recursively track existing children
+    struct wlr_subsurface *child;
+    wl_list_for_each(child, &wlr_subsurface->surface->current.subsurfaces_below,
+        current.link)
+    {
+        popup_track_subsurface(popup, child);
+    }
+    wl_list_for_each(child, &wlr_subsurface->surface->current.subsurfaces_above,
+        current.link)
+    {
+        popup_track_subsurface(popup, child);
+    }
+}
+
+static void popup_handle_new_subsurface(struct wl_listener *listener,
+    void *data)
+{
+    SparrowPopup *popup = wl_container_of(listener, popup, new_subsurface);
+    struct wlr_subsurface *wlr_sub = static_cast<struct wlr_subsurface*>(data);
+    popup_track_subsurface(popup, wlr_sub);
 }
 
 static void popup_handle_destroy(struct wl_listener *listener, void *data)
@@ -151,45 +250,52 @@ static void popup_handle_destroy(struct wl_listener *listener, void *data)
 
     wlr_log(WLR_INFO, "Popup destroyed: handle=%d", popup->handle);
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-
-    // Destroy scene tree safely (if not already destroyed by parent view destruction)
-    if (popup->scene_tree != nullptr)
     {
-        wl_list_remove(&popup->scene_tree_destroy.link);
-        wl_list_init(&popup->scene_tree_destroy.link);
-        wlr_scene_node_destroy(&popup->scene_tree->node);
-        popup->scene_tree = nullptr;
+        std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.texture_mutex);
+
+        // Destroy scene tree safely (if not already destroyed by parent view
+        // destruction)
+        if (popup->scene_tree != nullptr)
+        {
+            wl_list_remove(&popup->scene_tree_destroy.link);
+            wl_list_init(&popup->scene_tree_destroy.link);
+            wlr_scene_node_destroy(&popup->scene_tree->node);
+            popup->scene_tree = nullptr;
+        }
+
+        // Clean up Flutter texture resources
+        if (popup->texture_registered)
+        {
+            instance->embedder_api.UnregisterExternalTexture(instance->engine,
+                popup->texture_id);
+            popup->texture_registered = false;
+        }
+
+        // Clear button state tracking for this popup (uses +200000 offset)
+        sparrow_clear_surface_buttons(popup->handle + 200000);
+
+        // Remove tracked subsurfaces
+        SparrowPopupSubsurface *sub_entry, *sub_tmp;
+        wl_list_for_each_safe(sub_entry, sub_tmp, &popup->subsurfaces, link)
+        {
+            wl_list_remove(&sub_entry->commit.link);
+            wl_list_remove(&sub_entry->destroy.link);
+            wl_list_remove(&sub_entry->new_subsurface.link);
+            wl_list_remove(&sub_entry->link);
+            delete sub_entry;
+        }
+        wl_list_remove(&popup->new_subsurface.link);
+
+        // Remove listeners
+        wl_list_remove(&popup->map.link);
+        wl_list_remove(&popup->unmap.link);
+        wl_list_remove(&popup->destroy.link);
+        wl_list_remove(&popup->commit.link);
+        wl_list_remove(&popup->reposition.link);
+
+        // Remove from handle map
+        handle_map_remove(instance->popups, popup->handle);
     }
-
-    if (popup->locked_buffer != nullptr)
-    {
-        wlr_buffer_unlock(popup->locked_buffer);
-        popup->locked_buffer = nullptr;
-    }
-
-    // Clean up Flutter texture resources
-    if (popup->texture_registered)
-    {
-        instance->embedder_api.UnregisterExternalTexture(instance->engine,
-            popup->texture_id);
-        popup->texture_registered = false;
-    }
-
-    // Clear button state tracking for this popup (uses +200000 offset)
-    sparrow_clear_surface_buttons(popup->handle + 200000);
-
-    // Remove listeners
-    wl_list_remove(&popup->map.link);
-    wl_list_remove(&popup->unmap.link);
-    wl_list_remove(&popup->destroy.link);
-    wl_list_remove(&popup->commit.link);
-    wl_list_remove(&popup->reposition.link);
-
-    // Remove from handle map
-    handle_map_remove(instance->popups, popup->handle);
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     if (parent_view)
     {
@@ -197,6 +303,157 @@ static void popup_handle_destroy(struct wl_listener *listener, void *data)
     }
 
     delete popup;
+}
+
+void sparrow_popup_unconstrain(SparrowPopup *popup)
+{
+    if (!popup || !popup->xdg_popup)
+    {
+        return;
+    }
+
+    Core *instance = Core::instance();
+    if (!instance || !instance->output_layout)
+    {
+        return;
+    }
+
+    int eff_w = 0;
+    int eff_h = 0;
+
+    // Use parent view's output for constraint
+    Output *output =
+        popup->parent_view ? popup->parent_view->current_output : nullptr;
+    if ((output == nullptr) && popup->parent_view)
+    {
+        output = sparrow_output_for_box(
+            popup->parent_view->x, popup->parent_view->y,
+            popup->parent_view->width, popup->parent_view->height);
+        if (output != nullptr)
+        {
+            popup->parent_view->current_output = output;
+            popup->parent_view->output_scale   = output->wlr_output->scale;
+        }
+    }
+
+    if (output == nullptr)
+    {
+        output = sparrow_get_first_output();
+    }
+
+    if ((output != nullptr) && (output->wlr_output != nullptr))
+    {
+        wlr_output_effective_resolution(output->wlr_output, &eff_w, &eff_h);
+        popup->current_output = output;
+        popup->output_scale   = output->wlr_output->scale;
+    }
+
+    if ((eff_w <= 0) || (eff_h <= 0))
+    {
+        if (popup->parent_view && (popup->parent_view->width > 0) &&
+            (popup->parent_view->height > 0))
+        {
+            eff_w = popup->parent_view->width;
+            eff_h = popup->parent_view->height;
+        }
+    }
+
+    // wlr_xdg_popup_unconstrain_from_box takes toplevel_space_box (coordinates
+    // relative to the root toplevel view). The toplevel parent surface's origin
+    // is always (0,0). If the parent view has an offset on the output (e.g. letterbox
+    // or position), the output's bounding box relative to toplevel surface starts at
+    // (-parent_view_x, -parent_view_y) with size (eff_w, eff_h).
+    // Note: Do NOT use wlr_output_layout coordinates here because toplevel surface
+    // space does not live in global multi-monitor layout space.
+    const int parent_view_x = popup->parent_view ? popup->parent_view->x : 0;
+    const int parent_view_y = popup->parent_view ? popup->parent_view->y : 0;
+    struct wlr_box toplevel_space_box = {
+        .x     = -parent_view_x,
+        .y     = -parent_view_y,
+        .width = eff_w,
+        .height = eff_h,
+    };
+
+    // Reset scheduled geometry to the unconstrained base geometry from positioner rules.
+    // Otherwise, if the popup was previously constrained/slid (e.g. during portrait mode),
+    // wlr_xdg_positioner_rules_unconstrain_box will see that the constrained position
+    // fits within the larger landscape bounds and will never restore the original position!
+    wlr_xdg_positioner_rules_get_geometry(&popup->xdg_popup->scheduled.rules,
+        &popup->xdg_popup->scheduled.geometry);
+
+    wlr_xdg_popup_unconstrain_from_box(popup->xdg_popup, &toplevel_space_box);
+    popup->xdg_popup->current.geometry = popup->xdg_popup->scheduled.geometry;
+    popup->unconstrained = true;
+    wlr_log(WLR_INFO,
+        "Popup %d unconstrained: toplevel_space_box=(%d,%d,%dx%d)",
+        popup->handle, toplevel_space_box.x, toplevel_space_box.y,
+        toplevel_space_box.width, toplevel_space_box.height);
+
+    if (popup->texture_registered)
+    {
+        send_popup_map(popup);
+        sparrow_popup_damage_whole(popup);
+    }
+
+    // Recursively unconstrain any child popups that depend on this popup's position
+    if (instance && instance->popups)
+    {
+        for (const auto &[handle, child_ptr] : *instance->popups)
+        {
+            auto *child = static_cast<SparrowPopup*>(child_ptr);
+            if (child && child->xdg_popup && (child->parent_popup == popup) &&
+                (child != popup))
+            {
+                sparrow_popup_unconstrain(child);
+            }
+        }
+    }
+}
+
+void sparrow_popups_update_on_output_change(Output *output)
+{
+    Core *instance = Core::instance();
+    if (!instance || !instance->popups)
+    {
+        return;
+    }
+
+    // Pass 1: Root popups (parent_popup == nullptr). Unconstraining root popups
+    // will recursively unconstrain any child popups down the hierarchy.
+    for (const auto &[handle, popup_ptr] : *instance->popups)
+    {
+        auto *popup = static_cast<SparrowPopup*>(popup_ptr);
+        if (!popup || !popup->xdg_popup || (popup->parent_popup != nullptr))
+        {
+            continue;
+        }
+
+        if ((output != nullptr) && (popup->current_output != output) &&
+            (!popup->parent_view || (popup->parent_view->current_output != output)))
+        {
+            continue;
+        }
+
+        sparrow_popup_unconstrain(popup);
+    }
+
+    // Pass 2: Nested popups (parent_popup != nullptr)
+    for (const auto &[handle, popup_ptr] : *instance->popups)
+    {
+        auto *popup = static_cast<SparrowPopup*>(popup_ptr);
+        if (!popup || !popup->xdg_popup || (popup->parent_popup == nullptr))
+        {
+            continue;
+        }
+
+        if ((output != nullptr) && (popup->current_output != output) &&
+            (!popup->parent_view || (popup->parent_view->current_output != output)))
+        {
+            continue;
+        }
+
+        sparrow_popup_unconstrain(popup);
+    }
 }
 
 static void popup_handle_commit(struct wl_listener *listener, void *data)
@@ -209,63 +466,7 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
     // Use parent's output bounds for popup constraint (multi-monitor fix)
     if (!popup->unconstrained)
     {
-        struct wlr_box output_box = {};
-
-        // Use parent view's output for constraint
-        Output *output = popup->parent_view ? popup->parent_view->current_output : nullptr;
-        if ((output == nullptr) && popup->parent_view)
-        {
-            output = sparrow_output_for_box(popup->parent_view->x, popup->parent_view->y,
-                popup->parent_view->width, popup->parent_view->height);
-            if (output != nullptr)
-            {
-                popup->parent_view->current_output = output;
-                popup->parent_view->output_scale   = output->wlr_output->scale;
-            }
-        }
-
-        if (output == nullptr)
-        {
-            output = sparrow_get_first_output();
-        }
-
-        if ((output != nullptr) && (output->wlr_output != nullptr))
-        {
-            wlr_output_layout_get_box(instance->output_layout, output->wlr_output,
-                &output_box);
-            popup->current_output = output;
-            popup->output_scale   = output->wlr_output->scale;
-        } else
-        {
-            wlr_output_layout_get_box(instance->output_layout, nullptr, &output_box);
-        }
-
-        if ((output_box.width <= 0) || (output_box.height <= 0))
-        {
-            if (popup->parent_view && (popup->parent_view->width > 0) && (popup->parent_view->height > 0))
-            {
-                output_box.width  = popup->parent_view->width;
-                output_box.height = popup->parent_view->height;
-            }
-        }
-
-        // wlr_xdg_popup_unconstrain_from_box takes toplevel_space_box (coordinates relative to the root
-        // toplevel view)
-        const int parent_view_x = popup->parent_view ? popup->parent_view->x : 0;
-        const int parent_view_y = popup->parent_view ? popup->parent_view->y : 0;
-        struct wlr_box toplevel_space_box = {
-            .x     = output_box.x - parent_view_x,
-            .y     = output_box.y - parent_view_y,
-            .width = output_box.width,
-            .height = output_box.height,
-        };
-
-        wlr_xdg_popup_unconstrain_from_box(popup->xdg_popup, &toplevel_space_box);
-        popup->unconstrained = true;
-        wlr_log(WLR_INFO,
-            "Popup %d unconstrained: toplevel_space_box=(%d,%d,%dx%d)",
-            popup->handle, toplevel_space_box.x, toplevel_space_box.y,
-            toplevel_space_box.width, toplevel_space_box.height);
+        sparrow_popup_unconstrain(popup);
     }
 
     if (!popup->xdg_surface || !popup->xdg_surface->surface->mapped)
@@ -273,29 +474,14 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
         return;
     }
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-    struct wlr_buffer *new_buf = nullptr;
-    if (popup->xdg_surface->surface && popup->xdg_surface->surface->buffer)
-    {
-        new_buf = popup->xdg_surface->surface->buffer->source;
-    }
-
-    if (new_buf != popup->locked_buffer)
-    {
-        if (new_buf != nullptr)
-        {
-            wlr_buffer_lock(new_buf);
-        }
-
-        if (popup->locked_buffer != nullptr)
-        {
-            wlr_buffer_unlock(popup->locked_buffer);
-        }
-
-        popup->locked_buffer = new_buf;
-    }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
+    // NOTE: We intentionally do NOT lock the popup's wlr_buffer here.
+    // Chromium uses single-buffered SHM for tooltips and waits for
+    // wl_buffer.release before painting content.  Locking the buffer
+    // (incrementing n_locks) prevents the release signal from reaching
+    // the client, creating a deadlock where Chromium never paints.
+    // Instead we use sparrow_surface_get_texture() in the texture
+    // callback, which accesses the wlroots-managed GL texture without
+    // holding a buffer lock.
 
     // Fallback: if surface is mapped but texture isn't registered, do it now
     // This handles cases where the map event was missed
@@ -321,8 +507,9 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
         }
     }
 
-    // Check if content dimensions or position changed - this can happen after unconstrain,
-    // reposition, or when the client resizes the popup content (e.g. Chrome omnibox suggestions).
+    // Check if content dimensions or position changed - this can happen after
+    // unconstrain, reposition, or when the client resizes the popup content (e.g.
+    // Chrome omnibox suggestions).
     if (popup->texture_registered)
     {
         struct wlr_surface *surf = popup->xdg_surface->surface;
@@ -362,6 +549,13 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
         if ((pos_geo.width == 0) || (pos_geo.height == 0))
         {
             pos_geo = popup->xdg_popup->scheduled.geometry;
+        } else if ((popup->xdg_popup->scheduled.geometry.width > 0) &&
+                   (popup->xdg_popup->scheduled.geometry.height > 0) &&
+                   ((popup->xdg_popup->scheduled.geometry.x != pos_geo.x) ||
+                    (popup->xdg_popup->scheduled.geometry.y != pos_geo.y)))
+        {
+            pos_geo.x = popup->xdg_popup->scheduled.geometry.x;
+            pos_geo.y = popup->xdg_popup->scheduled.geometry.y;
         }
 
         struct wlr_box win_geo = popup->xdg_surface->current.geometry;
@@ -393,11 +587,26 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
                 "size=%dx%d->%dx%d, re-sending popup_map",
                 popup->handle, popup->x, popup->y, new_x, new_y, popup->width,
                 popup->height, new_width, new_height);
-            send_popup_map(popup); // This will update popup->x/y/width/height and send to Flutter
+            send_popup_map(popup); // This will update popup->x/y/width/height and
+                                   // send to Flutter
+
+            if (instance && instance->popups)
+            {
+                for (const auto &[handle, child_ptr] : *instance->popups)
+                {
+                    auto *child = static_cast<SparrowPopup*>(child_ptr);
+                    if (child && child->xdg_popup && (child->parent_popup == popup) &&
+                        (child != popup))
+                    {
+                        sparrow_popup_unconstrain(child);
+                    }
+                }
+            }
         }
     }
 
-    bool is_visible = !popup->parent_view || sparrow_view_is_visible(popup->parent_view);
+    bool is_visible =
+        !popup->parent_view || sparrow_view_is_visible(popup->parent_view);
 
     // Mark texture as needing update
     if (is_visible && popup->texture_registered)
@@ -416,47 +625,22 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
             instance->record_client_commit(now_us);
         }
 
+        if (popup->parent_view && ((int64_t)popup->width * popup->height >= 2048))
+        {
+            sparrow_notify_redraw_activity(popup->parent_view, nullptr);
+        }
+
         sparrow_popup_damage_whole(popup);
     }
 }
 
 static void popup_handle_reposition(struct wl_listener *listener, void *data)
 {
+    (void)data;
     SparrowPopup *popup = wl_container_of(listener, popup, reposition);
-
-    // Update local position tracking from new geometry
-    struct wlr_box pos_geo = popup->xdg_popup->current.geometry;
-    if ((pos_geo.width == 0) || (pos_geo.height == 0))
-    {
-        pos_geo = popup->xdg_popup->scheduled.geometry;
-    }
-
-    struct wlr_box win_geo = popup->xdg_surface->current.geometry;
-    if ((win_geo.width == 0) || (win_geo.height == 0))
-    {
-        win_geo = popup->xdg_surface->pending.geometry;
-    }
-
-    popup->pos_x =
-        pos_geo.x + (popup->parent_popup ? popup->parent_popup->pos_x : 0);
-    popup->pos_y =
-        pos_geo.y + (popup->parent_popup ? popup->parent_popup->pos_y : 0);
-
-    popup->x     = popup->pos_x - win_geo.x;
-    popup->y     = popup->pos_y - win_geo.y;
-    popup->width = pos_geo.width;
-    popup->height = pos_geo.height;
-
-    wlr_log(WLR_INFO, "Popup repositioned: handle=%d, pos=(%d,%d), size=%dx%d",
-        popup->handle, popup->x, popup->y, popup->width, popup->height);
-
-    // Send updated position to Flutter (for any overlay UI)
-    if (popup->xdg_surface->surface->mapped)
-    {
-        // instance->callable_queue.enqueue([=] {
-        send_popup_map(popup); // Re-send with new position
-        // });
-    }
+    wlr_log(WLR_INFO, "Popup %d received reposition event, unconstraining",
+        popup->handle);
+    sparrow_popup_unconstrain(popup);
 }
 
 void sparrow_new_xdg_popup(struct wl_listener *listener, void *data)
@@ -530,10 +714,8 @@ void sparrow_new_xdg_popup(struct wl_listener *listener, void *data)
         win_geo = xdg_popup->base->current.geometry;
     }
 
-    popup->pos_x =
-        pos_geo.x + (parent_popup ? parent_popup->pos_x : 0);
-    popup->pos_y =
-        pos_geo.y + (parent_popup ? parent_popup->pos_y : 0);
+    popup->pos_x = pos_geo.x + (parent_popup ? parent_popup->pos_x : 0);
+    popup->pos_y = pos_geo.y + (parent_popup ? parent_popup->pos_y : 0);
     popup->x     = popup->pos_x - win_geo.x;
     popup->y     = popup->pos_y - win_geo.y;
     popup->width = pos_geo.width;
@@ -546,34 +728,43 @@ void sparrow_new_xdg_popup(struct wl_listener *listener, void *data)
     popup->handle = handle_map_add(instance->popups, static_cast<void*>(popup));
 
     wlr_log(WLR_INFO,
-        "Created popup: handle=%d, parent=%d, geo=(%d,%d,%dx%d), output=%s, "
+        "Created popup: handle=%d, parent_view=%d, is_child=%d "
+        "(parent_popup=%d), "
+        "geo=(%d,%d,%dx%d), pos_geo=(%d,%d,%dx%d), win_geo=(%d,%d,%dx%d), "
         "scale=%.2f",
-        popup->handle, popup->parent_view->handle, popup->x, popup->y,
-        popup->width, popup->height,
-        popup->current_output ? popup->current_output->wlr_output->name :
-        "none",
+        popup->handle, popup->parent_view->handle, parent_popup != nullptr,
+        parent_popup ? parent_popup->handle : 0, popup->x, popup->y,
+        popup->width, popup->height, pos_geo.x, pos_geo.y, pos_geo.width,
+        pos_geo.height, win_geo.x, win_geo.y, win_geo.width, win_geo.height,
         popup->output_scale);
+
+    wl_list_init(&popup->subsurfaces);
 
     // Create popup scene tree as child of parent's scene tree (like tinywl)
     // This way popup positioning is automatic - relative to parent
     wl_list_init(&popup->scene_tree_destroy.link);
-    if (popup->parent_view->scene_xdg_tree != nullptr)
+    struct wlr_scene_tree *parent_tree = parent_popup ?
+        parent_popup->scene_tree :
+        popup->parent_view->scene_xdg_tree;
+    if (parent_tree != nullptr)
     {
-        popup->scene_tree = wlr_scene_xdg_surface_create(
-            popup->parent_view->scene_xdg_tree, xdg_popup->base);
+        popup->scene_tree =
+            wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
         if (popup->scene_tree != nullptr)
         {
             popup->scene_tree->node.data     = popup;
             popup->scene_tree_destroy.notify = popup_handle_scene_tree_destroy;
             wl_signal_add(&popup->scene_tree->node.events.destroy,
                 &popup->scene_tree_destroy);
-            wlr_log(WLR_INFO, "Created popup scene as child of parent view %d",
-                popup->parent_view->handle);
+            wlr_log(WLR_INFO, "Created popup scene as child of %s %d",
+                parent_popup ? "parent popup" : "parent view",
+                parent_popup ? parent_popup->handle : popup->parent_view->handle);
         }
     } else
     {
-        wlr_log(WLR_ERROR, "Parent view %d has no scene tree for popup",
-            popup->parent_view->handle);
+        wlr_log(WLR_ERROR, "Parent %s %d has no scene tree for popup",
+            parent_popup ? "popup" : "view",
+            parent_popup ? parent_popup->handle : popup->parent_view->handle);
     }
 
     // Store popup in xdg_surface data for hit testing
@@ -595,6 +786,23 @@ void sparrow_new_xdg_popup(struct wl_listener *listener, void *data)
     popup->reposition.notify = popup_handle_reposition;
     wl_signal_add(&xdg_popup->events.reposition, &popup->reposition);
 
+    popup->new_subsurface.notify = popup_handle_new_subsurface;
+    wl_signal_add(&xdg_popup->base->surface->events.new_subsurface,
+        &popup->new_subsurface);
+
+    // Track any existing subsurfaces
+    struct wlr_subsurface *sub;
+    wl_list_for_each(sub, &xdg_popup->base->surface->current.subsurfaces_below,
+        current.link)
+    {
+        popup_track_subsurface(popup, sub);
+    }
+    wl_list_for_each(sub, &xdg_popup->base->surface->current.subsurfaces_above,
+        current.link)
+    {
+        popup_track_subsurface(popup, sub);
+    }
+
     // Check if surface is already mapped (can happen in some cases)
     wlr_log(WLR_INFO, "Popup surface mapped state: %s",
         xdg_popup->base->surface->mapped ? "true" : "false");
@@ -615,7 +823,8 @@ void sparrow_focus_popup(SparrowPopup *popup)
 
     // Always keep parent toplevel activated while popup is active
     if (popup->parent_view && popup->parent_view->toplevel &&
-        popup->parent_view->xdg_surface && popup->parent_view->xdg_surface->initialized)
+        popup->parent_view->xdg_surface &&
+        popup->parent_view->xdg_surface->initialized)
     {
         wlr_xdg_toplevel_set_activated(popup->parent_view->toplevel, true);
         popup->parent_view->activated = true;

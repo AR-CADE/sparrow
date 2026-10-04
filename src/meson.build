@@ -32,6 +32,7 @@ sparrow_sources = [
 
   'surface/decoration.cpp',
   'surface/popup.cpp',
+  'surface/session_lock.cpp',
   'surface/sub_surface.cpp',
   'surface/surface.cpp',
   'surface/view.cpp',
@@ -59,6 +60,7 @@ sparrow_dependencies = [
   xcb,
   embedder,
   libplatform,
+  simdjson_dep,
   perfetto_dep,
   dl_dep,
 ]
@@ -67,7 +69,7 @@ sparrow_inc = [
   sparrow_conf_inc,
   sparrow_api_inc,
   platform_inc,
-  rapidjson_inc,
+  simdjson_inc,
   text_input_inc,
 ]
 

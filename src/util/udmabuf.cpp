@@ -1,5 +1,6 @@
 #include "util/udmabuf.hpp"
 #include "core.hpp"
+#include <thread>
 
 #include <drm_fourcc.h>
 #include <fcntl.h>
@@ -154,7 +155,8 @@ struct wlr_texture *sparrow_udmabuf_get_or_import_texture(struct wlr_surface *su
     Core *instance = Core::instance();
     // Only import new textures into wlroots GLES renderer on the main Wayland thread
     // where the renderer's EGL context is active.
-    if ((instance->main_thread_id != 0) && !pthread_equal(pthread_self(), instance->main_thread_id))
+    if ((instance->main_thread_id != std::thread::id()) &&
+        (std::this_thread::get_id() != instance->main_thread_id))
     {
         return nullptr;
     }

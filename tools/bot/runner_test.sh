@@ -115,6 +115,20 @@ if [ ! -f "$RUNNER_BIN" ]; then
 fi
 
 if [ ! -d "$APP_BUNDLE" ]; then
+    if [ "$APP_BUNDLE" = "$DEFAULT_APP" ] && [ -d "${OUT_DIR}/simple_app" ]; then
+        APP_BUNDLE="${OUT_DIR}/simple_app"
+        echo -e "${YELLOW}[NOTICE] Using alternative test bundle: ${APP_BUNDLE}${NC}"
+    elif [ -d "${ROOT_DIR}/examples/simple_app" ]; then
+        echo -e "${YELLOW}[NOTICE] App bundle not found at ${APP_BUNDLE}. Building automatically from examples/simple_app...${NC}"
+        (cd "${ROOT_DIR}/examples/simple_app" && flutter build linux --release)
+        "${ROOT_DIR}/tools/optimize_bundle.sh" \
+            "${ROOT_DIR}/examples/simple_app/build/linux/x64/release/bundle" \
+            "${OUT_DIR}/simple_app"
+        APP_BUNDLE="${OUT_DIR}/simple_app"
+    fi
+fi
+
+if [ ! -d "$APP_BUNDLE" ]; then
     echo -e "${RED}[ERROR] App bundle not found at ${APP_BUNDLE}.${NC}"
     echo "Run ./tools/optimize_bundle.sh to create the test bundle."
     exit 1
@@ -310,8 +324,11 @@ while [ $(($(date +%s) - START_TIME)) -lt "$DURATION_SEC" ]; do
     # Synthetic pointer and keyboard inputs using wlrctl if available
     if command -v wlrctl &>/dev/null; then
         WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl pointer move 200 300 2>/dev/null || true
-        WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl pointer click left 2>/dev/null || true
-        WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl keyboard type "sparrow test input $LOOP_COUNT" 2>/dev/null || true
+        if [ -x "${ROOT_DIR}/tools/bot/repro_clients/sparrow_key" ]; then
+            WAYLAND_DISPLAY="$SPARROW_DISPLAY" "${ROOT_DIR}/tools/bot/repro_clients/sparrow_key" type "echo 'sparrow test input $LOOP_COUNT'\n" 2>/dev/null || true
+        else
+            WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl keyboard type "sparrow test input $LOOP_COUNT" 2>/dev/null || true
+        fi
         WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl pointer move 400 500 2>/dev/null || true
         WAYLAND_DISPLAY="$SPARROW_DISPLAY" wlrctl pointer click left 2>/dev/null || true
     fi

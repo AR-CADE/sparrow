@@ -2,13 +2,13 @@
 #define INPUT_MANAGER_HPP
 
 #include <cstdint>
-#include <string>
 #include <functional>
+#include <string>
 #include <unordered_map>
 
-#include <wayland-client.h>
-#include <xkbcommon/xkbcommon.h>
+#include <sparrow/nonstd/wlroots-full.hpp>
 #include <xkbcommon/xkbcommon-compose.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "flutter_embedder.h"
 
@@ -30,10 +30,12 @@ class InputManager
     void handle_seat_name(struct wl_seat *seat, const char *name);
 
     // Pointer event handlers
-    void handle_pointer_enter(uint32_t serial, struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy);
+    void handle_pointer_enter(uint32_t serial, struct wl_surface *surface,
+        wl_fixed_t sx, wl_fixed_t sy);
     void handle_pointer_leave(uint32_t serial, struct wl_surface *surface);
     void handle_pointer_motion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy);
-    void handle_pointer_button(uint32_t serial, uint32_t time, uint32_t button, uint32_t state);
+    void handle_pointer_button(uint32_t serial, uint32_t time, uint32_t button,
+        uint32_t state);
     void handle_pointer_axis(uint32_t time, uint32_t axis, wl_fixed_t value);
     void handle_pointer_axis_source(uint32_t axis_source);
     void handle_pointer_axis_stop(uint32_t time, uint32_t axis);
@@ -43,11 +45,14 @@ class InputManager
 
     // Keyboard event handlers
     void handle_keyboard_keymap(uint32_t format, int32_t fd, uint32_t size);
-    void handle_keyboard_enter(uint32_t serial, struct wl_surface *surface, struct wl_array *keys);
+    void handle_keyboard_enter(uint32_t serial, struct wl_surface *surface,
+        struct wl_array *keys);
     void handle_keyboard_leave(uint32_t serial, struct wl_surface *surface);
-    void handle_keyboard_key(uint32_t serial, uint32_t time, uint32_t key, uint32_t state);
-    void handle_keyboard_modifiers(uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched,
-        uint32_t mods_locked, uint32_t group);
+    void handle_keyboard_key(uint32_t serial, uint32_t time, uint32_t key,
+        uint32_t state);
+    void handle_keyboard_modifiers(uint32_t serial, uint32_t mods_depressed,
+        uint32_t mods_latched, uint32_t mods_locked,
+        uint32_t group);
     void handle_keyboard_repeat_info(int32_t rate, int32_t delay);
     void handle_repeat_timer();
     int get_repeat_timer_fd() const
@@ -56,15 +61,18 @@ class InputManager
     }
 
     // Touch event handlers
-    void handle_touch_down(uint32_t serial, uint32_t time, struct wl_surface *surface, int32_t id,
-        wl_fixed_t x, wl_fixed_t y);
+    void handle_touch_down(uint32_t serial, uint32_t time,
+        struct wl_surface *surface, int32_t id, wl_fixed_t x,
+        wl_fixed_t y);
     void handle_touch_up(uint32_t serial, uint32_t time, int32_t id);
-    void handle_touch_motion(uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y);
+    void handle_touch_motion(uint32_t time, int32_t id, wl_fixed_t x,
+        wl_fixed_t y);
     void handle_touch_frame();
     void handle_touch_cancel();
 
     // Hook for keyboard key events (text input & shortcuts)
-    std::function<void(xkb_keysym_t keysym, uint32_t unicode, bool pressed)> on_key_event;
+    std::function<void(xkb_keysym_t keysym, uint32_t unicode, bool pressed)>
+    on_key_event;
 
     // Cursor management
     void set_cursor(const std::string & kind);
@@ -76,10 +84,12 @@ class InputManager
 
   private:
     void ensure_pointer_added(double x, double y);
-    void send_pointer_event(FlutterPointerPhase phase, double x, double y, int64_t buttons,
-        FlutterPointerSignalKind signal_kind = kFlutterPointerSignalKindNone, double scroll_delta_x = 0.0,
-        double scroll_delta_y = 0.0);
-    void send_touch_event(FlutterPointerPhase phase, int32_t device_id, double x, double y);
+    void send_pointer_event(
+        FlutterPointerPhase phase, double x, double y, int64_t buttons,
+        FlutterPointerSignalKind signal_kind = kFlutterPointerSignalKindNone,
+        double scroll_delta_x = 0.0, double scroll_delta_y = 0.0);
+    void send_touch_event(FlutterPointerPhase phase, int32_t device_id, double x,
+        double y);
 
     WaylandWindow *window_ = nullptr;
     FlutterEngine engine_  = nullptr;

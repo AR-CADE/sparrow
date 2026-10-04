@@ -1,8 +1,10 @@
 #include "pointer.hpp"
 #include "flutter/platform/cursor.hpp"
 #include "flutter/platform/engine/messages/seat_message.hpp"
+#include "output.hpp"
 #include "seat.hpp"
 #include <core.hpp>
+#include <surface/session_lock.hpp>
 #include <surface/view.hpp>
 
 void process_cursor_motion(uint32_t time, double dx, double dy,
@@ -10,6 +12,50 @@ void process_cursor_motion(uint32_t time, double dx, double dy,
     bool is_trackpad)
 {
     Core *instance = Core::instance();
+
+    // Session Lock mode - route cursor strictly to lock surface
+    if (sparrow_is_session_locked())
+    {
+        double sx = 0, sy = 0;
+        struct wlr_surface *surface = sparrow_session_lock_surface_at(
+            instance->cursor->x, instance->cursor->y, &sx, &sy);
+        if (surface != nullptr)
+        {
+            wlr_seat_pointer_notify_enter(instance->seat, surface, sx, sy);
+            wlr_seat_pointer_notify_motion(instance->seat, time, sx, sy);
+            wlr_seat_pointer_notify_frame(instance->seat);
+            if (instance->seat->keyboard_state.focused_surface != surface)
+            {
+                sparrow_session_lock_focus_surface(surface);
+            }
+        } else
+        {
+            wlr_seat_pointer_clear_focus(instance->seat);
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
+            instance->seat);
+
+        static double s_prev_cx = -1.0, s_prev_cy = -1.0;
+        if ((s_prev_cx >= 0.0) && (s_prev_cy >= 0.0))
+        {
+            struct wlr_box old_cursor_box = {.x = (int)s_prev_cx - 32,
+                .y     = (int)s_prev_cy - 32,
+                .width = 80,
+                .height = 80};
+            sparrow_damage_add_box(&old_cursor_box, false);
+        }
+
+        int new_cx = (int)instance->cursor->x;
+        int new_cy = (int)instance->cursor->y;
+        struct wlr_box new_cursor_box = {
+            .x = new_cx - 32, .y = new_cy - 32, .width = 80, .height = 80};
+        sparrow_damage_add_box(&new_cursor_box, false);
+
+        s_prev_cx = instance->cursor->x;
+        s_prev_cy = instance->cursor->y;
+        return;
+    }
 
     // Direct input mode - bypass Flutter for low-latency gaming
     if (instance->direct_input_mode && (instance->direct_input_surface != 0))
@@ -45,13 +91,12 @@ void process_cursor_motion(uint32_t time, double dx, double dy,
 
     // Add damage for old cursor position and new cursor position
     // Cursor hotspot can vary from (0,0) to (32,32) and cursor sizes up to 48x48.
-    // Box of 80x80 offset by -32 ensures 100% of the previous cursor is cleanly erased
-    // across all frame buffers without leaving ghost trails.
+    // Box of 80x80 offset by -32 ensures 100% of the previous cursor is cleanly
+    // erased across all frame buffers without leaving ghost trails.
     static double s_prev_cx = -1.0, s_prev_cy = -1.0;
     if ((s_prev_cx >= 0.0) && (s_prev_cy >= 0.0))
     {
-        struct wlr_box old_cursor_box = {
-            .x     = (int)s_prev_cx - 32,
+        struct wlr_box old_cursor_box = {.x = (int)s_prev_cx - 32,
             .y     = (int)s_prev_cy - 32,
             .width = 80,
             .height = 80};
@@ -110,7 +155,8 @@ void sparrow_pointer_constraints_set_focus(Core *core,
         return;
     }
 
-    if (core->active_constraint && (core->active_constraint->surface == surface))
+    if (core->active_constraint &&
+        (core->active_constraint->surface == surface))
     {
         return;
     }
@@ -140,7 +186,8 @@ void handle_new_pointer_constraint(struct wl_listener *listener, void *data)
     struct wlr_pointer_constraint_v1 *wlr_constraint =
         static_cast<wlr_pointer_constraint_v1*>(data);
 
-    struct sparrow_pointer_constraint *constraint = new sparrow_pointer_constraint();
+    struct sparrow_pointer_constraint *constraint =
+        new sparrow_pointer_constraint();
     constraint->wlr_constraint = wlr_constraint;
     constraint->destroy.notify = handle_constraint_destroy;
     wl_signal_add(&wlr_constraint->events.destroy, &constraint->destroy);
@@ -236,14 +283,14 @@ void on_server_cursor_motion(struct wl_listener *listener, void *data)
     wlr_cursor_move(instance->cursor, &event->pointer->base, event->delta_x,
         event->delta_y);
 
-    if (instance->active_constraint &&
-        (instance->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_CONFINED))
+    if (instance->active_constraint && (instance->active_constraint->type ==
+                                        WLR_POINTER_CONSTRAINT_V1_CONFINED))
     {
         sparrow_pointer_constraint_confine(instance->active_constraint);
     }
 
-    process_cursor_motion(event->time_msec, event->delta_x,
-        event->delta_y, event->unaccel_dx, event->unaccel_dy);
+    process_cursor_motion(event->time_msec, event->delta_x, event->delta_y,
+        event->unaccel_dx, event->unaccel_dy);
 }
 
 void on_server_cursor_motion_absolute(struct wl_listener *listener,
@@ -295,8 +342,8 @@ void on_server_cursor_motion_absolute(struct wl_listener *listener,
     wlr_cursor_warp_absolute(instance->cursor, &event->pointer->base, event->x,
         event->y);
 
-    if (instance->active_constraint &&
-        (instance->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_CONFINED))
+    if (instance->active_constraint && (instance->active_constraint->type ==
+                                        WLR_POINTER_CONSTRAINT_V1_CONFINED))
     {
         sparrow_pointer_constraint_confine(instance->active_constraint);
     }
@@ -310,6 +357,29 @@ void on_server_cursor_button(struct wl_listener *listener, void *data)
     Core *instance = Core::instance();
     struct wlr_pointer_button_event *event =
         static_cast<wlr_pointer_button_event*>(data);
+
+    // Session Lock mode - route button strictly to lock surface
+    if (sparrow_is_session_locked())
+    {
+        double sx = 0, sy = 0;
+        struct wlr_surface *surface = sparrow_session_lock_surface_at(
+            instance->cursor->x, instance->cursor->y, &sx, &sy);
+        if (surface != nullptr)
+        {
+            wlr_seat_pointer_notify_enter(instance->seat, surface, sx, sy);
+            wlr_seat_pointer_notify_button(instance->seat, event->time_msec,
+                event->button, event->state);
+            wlr_seat_pointer_notify_frame(instance->seat);
+            if (instance->seat->keyboard_state.focused_surface != surface)
+            {
+                sparrow_session_lock_focus_surface(surface);
+            }
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
+            instance->seat);
+        return;
+    }
 
     int64_t flutter_button_mask =
         seat_flutter_button_mask_from_linux(event->button);
@@ -369,6 +439,30 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
     struct wlr_pointer_axis_event *event =
         static_cast<wlr_pointer_axis_event*>(data);
 
+    // Session Lock mode - route axis strictly to lock surface
+    if (sparrow_is_session_locked())
+    {
+        double sx = 0, sy = 0;
+        struct wlr_surface *surface = sparrow_session_lock_surface_at(
+            instance->cursor->x, instance->cursor->y, &sx, &sy);
+        if (surface != nullptr)
+        {
+            wlr_seat_pointer_notify_enter(instance->seat, surface, sx, sy);
+            wlr_seat_pointer_notify_axis(
+                instance->seat, event->time_msec, event->orientation, event->delta,
+                event->delta_discrete, event->source, event->relative_direction);
+            wlr_seat_pointer_notify_frame(instance->seat);
+            if (instance->seat->keyboard_state.focused_surface != surface)
+            {
+                sparrow_session_lock_focus_surface(surface);
+            }
+        }
+
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
+            instance->seat);
+        return;
+    }
+
     // Pointer Lock mode - bypass Flutter for low-latency gaming / locked pointer
     if (instance->active_constraint &&
         (instance->active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED))
@@ -400,7 +494,9 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
     uint32_t mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
     if ((mods & WLR_MODIFIER_LOGO) != 0)
     {
-        double delta = (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) ? event->delta : 0.0;
+        double delta = (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) ?
+            event->delta :
+            0.0;
         if (delta != 0.0)
         {
             send_zoom_scroll(delta, instance->cursor->x, instance->cursor->y);
@@ -440,13 +536,14 @@ void on_server_cursor_axis(struct wl_listener *listener, void *data)
 
     if (is_touchpad)
     {
-        // Standard GTK / Chromium multiplier (53.0 / 10.0 = 5.3), consistent with sparrow-app-runner.
+        // Standard GTK / Chromium multiplier (53.0 / 10.0 = 5.3), consistent with
+        // sparrow-app-runner.
         const double kTrackpadHorizontalMultiplier = 5.3;
 
-        // In the compositor overview, the PageView uses viewportFraction = 0.5 (half-width cards)
-        // without pageSnapping, making full 5.3x acceleration feel overly slippery.
-        // Scaling by kTrackpadHorizontalMultiplier / 2.0 (~2.65x) provides smooth, responsive finger
-        // tracking.
+        // In the compositor overview, the PageView uses viewportFraction = 0.5
+        // (half-width cards) without pageSnapping, making full 5.3x acceleration
+        // feel overly slippery. Scaling by kTrackpadHorizontalMultiplier / 2.0
+        // (~2.65x) provides smooth, responsive finger tracking.
         scroll_delta_x *= (kTrackpadHorizontalMultiplier / 2.0);
 
         if (event->delta == 0.0)
@@ -494,12 +591,19 @@ void on_server_cursor_frame(struct wl_listener *listener, void *data)
 void handle_swipe_begin(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_swipe_begin_event *event =
         static_cast<wlr_pointer_swipe_begin_event*>(data);
 
+#ifdef DEBUG
     wlr_log(WLR_INFO, "swipe begin, %u, fingers=%u", event->time_msec,
         event->fingers);
+#endif
 
     if (event->fingers >= 3)
     {
@@ -519,6 +623,11 @@ void handle_swipe_begin(struct wl_listener *listener, void *data)
 void handle_swipe_update(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_swipe_update_event *event =
         static_cast<wlr_pointer_swipe_update_event*>(data);
@@ -540,12 +649,18 @@ void handle_swipe_update(struct wl_listener *listener, void *data)
 void handle_swipe_end(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_swipe_end_event *event =
         static_cast<wlr_pointer_swipe_end_event*>(data);
 
+#ifdef DEBUG
     wlr_log(WLR_INFO, "swipe end, %u", event->time_msec);
-
+#endif
     if (core->input.is_compositor_swipe)
     {
         send_gesture_swipe_end(event->cancelled, event->time_msec);
@@ -564,13 +679,18 @@ void handle_swipe_end(struct wl_listener *listener, void *data)
 void handle_pinch_begin(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_pinch_begin_event *event =
         static_cast<wlr_pointer_pinch_begin_event*>(data);
-
+#ifdef DEBUG
     wlr_log(WLR_INFO, "pinch begin, %u, fingers=%u", event->time_msec,
         event->fingers);
-
+#endif
     if (core->pointer_gestures)
     {
         wlr_pointer_gestures_v1_send_pinch_begin(core->pointer_gestures, core->seat,
@@ -587,6 +707,11 @@ void handle_pinch_begin(struct wl_listener *listener, void *data)
 void handle_pinch_update(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_pinch_update_event *event =
         static_cast<wlr_pointer_pinch_update_event*>(data);
@@ -609,11 +734,18 @@ void handle_pinch_update(struct wl_listener *listener, void *data)
 void handle_pinch_end(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_pinch_end_event *event =
         static_cast<wlr_pointer_pinch_end_event*>(data);
 
+#ifdef DEBUG
     wlr_log(WLR_INFO, "pinch end, %u", event->time_msec);
+#endif
 
     if (core->pointer_gestures)
     {
@@ -631,6 +763,11 @@ void handle_pinch_end(struct wl_listener *listener, void *data)
 void handle_hold_begin(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_hold_begin_event *event =
         static_cast<wlr_pointer_hold_begin_event*>(data);
@@ -645,6 +782,11 @@ void handle_hold_begin(struct wl_listener *listener, void *data)
 void handle_hold_end(struct wl_listener *listener, void *data)
 {
     (void)listener;
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *core = Core::instance();
     struct wlr_pointer_hold_end_event *event =
         static_cast<wlr_pointer_hold_end_event*>(data);
@@ -833,7 +975,8 @@ void handle_new_virtual_pointer(struct wl_listener *listener, void *data)
     struct sparrow_pointer *pointer = new sparrow_pointer();
     if (!pointer)
     {
-        wlr_log(WLR_ERROR, "Failed to allocate sparrow_pointer for virtual pointer");
+        wlr_log(WLR_ERROR,
+            "Failed to allocate sparrow_pointer for virtual pointer");
         return;
     }
 

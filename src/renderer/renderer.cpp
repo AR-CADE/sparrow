@@ -1,13 +1,13 @@
 #include "renderer.hpp"
 #include "core.hpp"
 #include "flutter_embedder.h"
+#include "output.hpp"
 #include "shaders.hpp"
 #include "surface/surface.hpp"
 #include "surface/view.hpp"
 #include "util/trace.hpp"
 #include "util/udmabuf.hpp"
 #include <cstdio>
-
 #ifdef USE_DMABUF
     #include <libdrm/drm_fourcc.h>
 #endif
@@ -382,7 +382,7 @@ static bool present_layers(const FlutterLayer **f_layers, size_t layers_count,
     Core *instance = Core::instance();
     struct sparrow_renderer *renderer = &instance->sparrow_renderer;
 
-    pthread_mutex_lock(&renderer->render_mutex);
+    std::lock_guard<std::recursive_mutex> lock(renderer->render_mutex);
 
     for (int i = 0; i < (int)renderer->current_scene.layers_count; i++)
     {
@@ -407,7 +407,6 @@ static bool present_layers(const FlutterLayer **f_layers, size_t layers_count,
             calloc(layers_count, sizeof(struct sparrow_renderer_scene_layer)));
     if (!layers)
     {
-        pthread_mutex_unlock(&renderer->render_mutex);
         return false;
     }
 
@@ -506,8 +505,6 @@ static bool present_layers(const FlutterLayer **f_layers, size_t layers_count,
         eglCreateSync(instance->egl_display, EGL_SYNC_FENCE, nullptr);
     glFlush();
     renderer->current_page = (renderer->current_page == 0) ? 1 : 0;
-
-    pthread_mutex_unlock(&renderer->render_mutex);
     return true;
 }
 
@@ -815,26 +812,6 @@ void sparrow_renderer_init(gl_resolve_fn resolver)
 
     renderer->current_page = 0;
     renderer->current_scene.layers_count = 0;
-
-    pthread_mutexattr_t render_mutex_attr;
-    pthread_mutexattr_init(&render_mutex_attr);
-    pthread_mutexattr_settype(&render_mutex_attr, PTHREAD_MUTEX_RECURSIVE);
-    if (pthread_mutex_init(&renderer->render_mutex, &render_mutex_attr) != 0)
-    {
-        wlr_log(WLR_ERROR, "Could not init render mutex");
-    }
-
-    pthread_mutexattr_destroy(&render_mutex_attr);
-
-    pthread_mutexattr_t texture_mutex_attr;
-    pthread_mutexattr_init(&texture_mutex_attr);
-    pthread_mutexattr_settype(&texture_mutex_attr, PTHREAD_MUTEX_RECURSIVE);
-    if (pthread_mutex_init(&renderer->texture_mutex, &texture_mutex_attr) != 0)
-    {
-        wlr_log(WLR_ERROR, "Could not init texture mutex");
-    }
-
-    pthread_mutexattr_destroy(&texture_mutex_attr);
 
     eglMakeCurrent(instance->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
         instance->sparrow_renderer.flutter_egl_context);
@@ -1221,10 +1198,10 @@ static void render_surface_rounded_iterator(struct wlr_surface *surface, int sx,
 
     if (render_data->output_transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&dst_box, &dst_box,
+        wlr_box_transform(
+            &dst_box, &dst_box,
             wlr_output_transform_invert(render_data->output_transform),
-            render_data->viewport_width,
-            render_data->viewport_height);
+            render_data->viewport_width, render_data->viewport_height);
     }
 
     const GLfloat _texcoords[8] = {
@@ -1405,10 +1382,10 @@ static void render_surface_iterator(struct wlr_surface *surface, int sx, int sy,
 
     if (render_data->output_transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
-        wlr_box_transform(&dst_box, &dst_box,
+        wlr_box_transform(
+            &dst_box, &dst_box,
             wlr_output_transform_invert(render_data->output_transform),
-            render_data->viewport_width,
-            render_data->viewport_height);
+            render_data->viewport_width, render_data->viewport_height);
     }
 
     const enum wl_output_transform surface_transform =
@@ -1486,8 +1463,6 @@ static void render_scene_layer_platform(struct wlr_render_pass *render_pass,
         return;
     }
 
-    // pthread_mutex_lock(&renderer->render_mutex);
-
     // Use per-view output scale for multi-monitor support
     // The view's current_output is updated when its position changes
     double output_scale = 1.0;
@@ -1527,30 +1502,33 @@ static void render_scene_layer_platform(struct wlr_render_pass *render_pass,
     if ((surf_w > 0) && (surf_h > 0) && (layer->size.width > 0.0) &&
         (layer->size.height > 0.0))
     {
-        const double sx = layer->size.width / (double)surf_w;
-        const double sy = layer->size.height / (double)surf_h;
+        const bool orientation_mismatch =
+            ((layer->size.width > layer->size.height) != (surf_w > surf_h));
 
-        // Only scale up (this is what prevents "empty strip" on expansion).
-        // Threshold increased to 1.01 (1% tolerance) to avoid micro-scaling
-        // due to floating point rounding in the Flutter->C path.
-        if (isfinite(sx) && (sx > 1.01))
+        if (!orientation_mismatch)
         {
-            content_scale_x = sx;
-        }
+            const double sx = layer->size.width / (double)surf_w;
+            const double sy = layer->size.height / (double)surf_h;
 
-        if (isfinite(sy) && (sy > 1.01))
-        {
-            content_scale_y = sy;
-        }
+            // Only scale up during genuine proportional expansion in the same orientation.
+            // When an orientation change / rotation occurs, or when one axis grows while
+            // the other shrinks, do NOT scale non-uniformly, which deforms the app.
+            if (isfinite(sx) && isfinite(sy) && (sx > 1.01) && (sy > 1.01) &&
+                (fabs(sx - sy) < 0.2))
+            {
+                content_scale_x = sx;
+                content_scale_y = sy;
+            }
 
-        if (!isfinite(content_scale_x) || (content_scale_x <= 0.0))
-        {
-            content_scale_x = 1.0;
-        }
+            if (!isfinite(content_scale_x) || (content_scale_x <= 0.0))
+            {
+                content_scale_x = 1.0;
+            }
 
-        if (!isfinite(content_scale_y) || (content_scale_y <= 0.0))
-        {
-            content_scale_y = 1.0;
+            if (!isfinite(content_scale_y) || (content_scale_y <= 0.0))
+            {
+                content_scale_y = 1.0;
+            }
         }
     }
 
@@ -1714,18 +1692,53 @@ static void render_scene_layer_platform(struct wlr_render_pass *render_pass,
         }
     }
 
+    if (has_clip)
+    {
+        pixman_region32_translate(&clip_region, -viewport_x, -viewport_y);
+        if (viewport->transform != WL_OUTPUT_TRANSFORM_NORMAL)
+        {
+            wlr_region_transform(&clip_region, &clip_region,
+                wlr_output_transform_invert(viewport->transform),
+                viewport_width, viewport_height);
+        }
+    }
+
 #ifdef DAMAGE_HISTORY
-    // Intersect with frame damage region if provided
+    // If damage_region is provided, check if this platform view intersects the damaged
+    // region of this output frame. If not, we can skip rendering it completely.
+    // NOTE: We do NOT clip the view's internal contents to damage_region, because the client
+    // buffer is drawn as a whole into the platform view, and scissoring to fine-grained client
+    // damage prevents previous frame contents/rotations from being properly overwritten.
     if ((damage_region != nullptr) && pixman_region32_not_empty(damage_region))
     {
-        if (!has_clip)
+        struct wlr_box phys_view_box = {
+            .x     = (int)floor(layer->offset.x) - viewport_x,
+            .y     = (int)floor(layer->offset.y) - viewport_y,
+            .width = (int)ceil(layer->size.width),
+            .height = (int)ceil(layer->size.height),
+        };
+        if (viewport->transform != WL_OUTPUT_TRANSFORM_NORMAL)
         {
-            pixman_region32_init(&clip_region);
-            pixman_region32_copy(&clip_region, damage_region);
-            has_clip = true;
-        } else
+            wlr_box_transform(&phys_view_box, &phys_view_box,
+                wlr_output_transform_invert(viewport->transform),
+                viewport_width, viewport_height);
+        }
+
+        pixman_region32_t test_reg;
+        pixman_region32_init_rect(&test_reg, phys_view_box.x, phys_view_box.y,
+            phys_view_box.width, phys_view_box.height);
+        pixman_region32_intersect(&test_reg, &test_reg, damage_region);
+        bool intersects = pixman_region32_not_empty(&test_reg);
+        pixman_region32_fini(&test_reg);
+
+        if (!intersects)
         {
-            pixman_region32_intersect(&clip_region, &clip_region, damage_region);
+            if (has_clip)
+            {
+                pixman_region32_fini(&clip_region);
+            }
+
+            return;
         }
     }
 
@@ -1959,9 +1972,10 @@ static void handle_dmabuf_buffer_destroy(struct wlr_addon *addon)
     struct sparrow_renderer *renderer =
         instance ? &instance->sparrow_renderer : nullptr;
 
+    std::unique_lock<std::recursive_mutex> lock;
     if (renderer)
     {
-        pthread_mutex_lock(&renderer->texture_mutex);
+        lock = std::unique_lock<std::recursive_mutex>(renderer->texture_mutex);
     }
 
     wlr_addon_finish(&buffer->addon);
@@ -2005,11 +2019,6 @@ static void handle_dmabuf_buffer_destroy(struct wlr_addon *addon)
         {
             eglMakeCurrent(display, prev_draw, prev_read, prev_ctx);
         }
-    }
-
-    if (renderer)
-    {
-        pthread_mutex_unlock(&renderer->texture_mutex);
     }
 
     delete buffer;
@@ -2079,7 +2088,7 @@ bool sparrow_renderer_import_dmabuf_buffer(struct wlr_buffer *source_buffer,
         return false;
     }
 
-// Create GL texture
+    // Create GL texture
     #ifndef USE_GLES32
     struct gl_fns *fns = &renderer->fns;
     GLuint tex = 0;
@@ -2235,23 +2244,6 @@ static void render_scene_layer_texture(struct wlr_render_pass *render_pass,
     const double x1 = ceil(layer->offset.x + layer->size.width) - viewport->x;
     const double y1 = ceil(layer->offset.y + layer->size.height) - viewport->y;
 
-#ifdef DAMAGE_HISTORY
-    if ((damage_region != nullptr) && pixman_region32_not_empty(damage_region))
-    {
-        pixman_region32_t test_reg;
-        pixman_region32_init_rect(&test_reg, (int)x0, (int)y0, (int)(x1 - x0),
-            (int)(y1 - y0));
-        pixman_region32_intersect(&test_reg, &test_reg, damage_region);
-        bool intersects = pixman_region32_not_empty(&test_reg);
-        pixman_region32_fini(&test_reg);
-        if (!intersects)
-        {
-            return; // Skip rendering this backing store layer completely!
-        }
-    }
-
-#endif
-
     struct wlr_box log_box = {
         .x     = (int)x0,
         .y     = (int)y0,
@@ -2263,9 +2255,26 @@ static void render_scene_layer_texture(struct wlr_render_pass *render_pass,
     if (viewport->transform != WL_OUTPUT_TRANSFORM_NORMAL)
     {
         wlr_box_transform(&phys_box, &log_box,
-            wlr_output_transform_invert(viewport->transform), output_width,
-            output_height);
+            wlr_output_transform_invert(viewport->transform),
+            output_width, output_height);
     }
+
+#ifdef DAMAGE_HISTORY
+    if ((damage_region != nullptr) && pixman_region32_not_empty(damage_region))
+    {
+        pixman_region32_t test_reg;
+        pixman_region32_init_rect(&test_reg, phys_box.x, phys_box.y,
+            phys_box.width, phys_box.height);
+        pixman_region32_intersect(&test_reg, &test_reg, damage_region);
+        bool intersects = pixman_region32_not_empty(&test_reg);
+        pixman_region32_fini(&test_reg);
+        if (!intersects)
+        {
+            return; // Skip rendering this backing store layer completely!
+        }
+    }
+
+#endif
 
     // Normalize coordinates to -1.0 to 1.0 (NDC) on the physical output buffer
     const float left =
@@ -2364,7 +2373,7 @@ void sparrow_renderer_render_scene(struct wlr_render_pass *render_pass,
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
-    pthread_mutex_lock(&renderer->render_mutex);
+    std::lock_guard<std::recursive_mutex> lock(renderer->render_mutex);
 
     if (renderer->current_scene.sync != 0)
     {
@@ -2391,8 +2400,6 @@ void sparrow_renderer_render_scene(struct wlr_render_pass *render_pass,
     }
 
     renderer->current_scene.needs_update = false;
-
-    pthread_mutex_unlock(&renderer->render_mutex);
 }
 
 void sparrow_renderer_update_scene_positions()
@@ -2504,10 +2511,6 @@ void sparrow_renderer_destroy()
         glDeleteBuffers(1, &renderer->tex_coord_buffer);
         renderer->tex_coord_buffer = 0;
     }
-
-    // Destroy render mutex
-    pthread_mutex_destroy(&renderer->render_mutex);
-    pthread_mutex_destroy(&renderer->texture_mutex);
 
     // Unbind
     eglMakeCurrent(instance->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,

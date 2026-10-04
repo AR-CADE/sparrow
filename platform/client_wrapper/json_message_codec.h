@@ -5,15 +5,14 @@
 #ifndef FLUTTER_SHELL_PLATFORM_COMMON_JSON_MESSAGE_CODEC_H_
 #define FLUTTER_SHELL_PLATFORM_COMMON_JSON_MESSAGE_CODEC_H_
 
-#include <rapidjson/document.h>
-
+#include "encodable_value.h"
 #include "message_codec.h"
 
 namespace flutter {
 
 // A message encoding/decoding mechanism for communications to/from the
 // Flutter engine via JSON channels.
-class JsonMessageCodec : public MessageCodec<rapidjson::Document> {
+class JsonMessageCodec : public MessageCodec<EncodableValue> {
  public:
   // Returns the shared instance of the codec.
   static const JsonMessageCodec& GetInstance();
@@ -29,13 +28,13 @@ class JsonMessageCodec : public MessageCodec<rapidjson::Document> {
   JsonMessageCodec() = default;
 
   // |flutter::MessageCodec|
-  std::unique_ptr<rapidjson::Document> DecodeMessageInternal(
+  std::unique_ptr<EncodableValue> DecodeMessageInternal(
       const uint8_t* binary_message,
       const size_t message_size) const override;
 
   // |flutter::MessageCodec|
   std::unique_ptr<std::vector<uint8_t>> EncodeMessageInternal(
-      const rapidjson::Document& message) const override;
+      const EncodableValue& message) const override;
 };
 
 }  // namespace flutter

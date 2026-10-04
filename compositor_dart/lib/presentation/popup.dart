@@ -4,6 +4,7 @@ import 'package:compositor_dart/presentation/popup_platform_view_controller.dart
 import 'package:material_ui/material_ui.dart'
     show
         BuildContext,
+        FilterQuality,
         HitTestBehavior,
         Listener,
         StatelessWidget,
@@ -16,16 +17,24 @@ class PopupView extends StatelessWidget {
   const new({
     required this.popup,
     required this.freeze,
-    this.ratio = 1.0,
+    this.scaleX = 1.0,
+    this.scaleY = 1.0,
+    this.filterQuality = FilterQuality.none,
     super.key,
   });
   final Popup popup;
   final bool freeze;
-  final double ratio;
+  final double scaleX;
+  final double scaleY;
+  final FilterQuality filterQuality;
 
   @override
   Widget build(BuildContext context) {
-    final controller = PopupPlatformViewController(popup: popup, ratio: ratio);
+    final controller = PopupPlatformViewController(
+      popup: popup,
+      scaleX: scaleX,
+      scaleY: scaleY,
+    );
     // Use Listener to capture all pointer events and forward to wlroots
     // This maintains Flutter-first architecture while enabling popup input
     return Listener(
@@ -41,8 +50,8 @@ class PopupView extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Texture(
         freeze: freeze,
-        filterQuality: .none,
         textureId: popup.textureId,
+        filterQuality: filterQuality,
       ),
     );
   }

@@ -21,9 +21,7 @@
 #include "sparrow-ipc-v1-client-protocol.h"
 #include "ipc_client.hpp"
 
-#include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
+#include <simdjson.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -119,16 +117,13 @@ static PigeonRunnerRunnerHostApiVTable runner_host_api_vtable = {
   }
 };
 
-static void on_compositor_notification(const std::string& method, const rapidjson::Value& params) {
+static void on_compositor_notification(const std::string& method, const simdjson::dom::element& params) {
   if (!s_flutter_ipc_api) {
     return;
   }
   std::string json_str;
-  if (!params.IsNull()) {
-    rapidjson::StringBuffer sb;
-    rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
-    params.Accept(writer);
-    json_str = sb.GetString();
+  if (!params.is_null()) {
+    json_str = simdjson::to_string(params);
   }
   pigeon_runner_runner_flutter_ipc_api_on_notification(
       s_flutter_ipc_api,
@@ -239,25 +234,48 @@ static PigeonRunnerRunnerHostIpcApiVTable runner_host_ipc_api_vtable = {
       return;
     }
     g_object_ref(response_handle);
-    rapidjson::Document params;
-    params.SetObject();
-    s_ipc_client.send_request("getCompositorInfo", params, [response_handle](bool success, const rapidjson::Value& val) {
-      if (!success || !val.IsObject()) {
+    s_ipc_client.send_request("getCompositorInfo", [response_handle](bool success, const simdjson::dom::element& val) {
+      if (!success || !val.is_object()) {
         pigeon_runner_runner_host_ipc_api_respond_get_compositor_info(response_handle, nullptr);
         g_object_unref(response_handle);
         return;
       }
-      const char* compositor = (val.HasMember("compositor") && val["compositor"].IsString()) ? val["compositor"].GetString() : "";
-      const char* version = (val.HasMember("version") && val["version"].IsString()) ? val["version"].GetString() : "";
-      const char* ipc_channel = (val.HasMember("ipc_channel") && val["ipc_channel"].IsString()) ? val["ipc_channel"].GetString() : "";
-      int64_t surfaces_count = (val.HasMember("surfaces_count") && val["surfaces_count"].IsNumber()) ? val["surfaces_count"].GetInt64() : 0;
-      double client_fps = (val.HasMember("client_fps") && val["client_fps"].IsNumber()) ? val["client_fps"].GetDouble() : 0.0;
-      int64_t peer_pid = (val.HasMember("peer_pid") && val["peer_pid"].IsNumber()) ? val["peer_pid"].GetInt64() : 0;
-      const char* app_id = (val.HasMember("app_id") && val["app_id"].IsString()) ? val["app_id"].GetString() : "";
+      auto get_str = [](const simdjson::dom::element &el, const char *key) -> std::string {
+        auto res = el[key];
+        if (!res.error() && res.is_string()) {
+          auto s = res.get_string();
+          if (!s.error()) return std::string(s.value());
+        }
+        return "";
+      };
+      auto get_i64 = [](const simdjson::dom::element &el, const char *key) -> int64_t {
+        auto res = el[key];
+        if (!res.error()) {
+          int64_t v = 0;
+          if (res.get(v) == simdjson::SUCCESS) return v;
+        }
+        return 0;
+      };
+      auto get_double = [](const simdjson::dom::element &el, const char *key) -> double {
+        auto res = el[key];
+        if (!res.error()) {
+          double v = 0.0;
+          if (res.get(v) == simdjson::SUCCESS) return v;
+        }
+        return 0.0;
+      };
+
+      std::string compositor = get_str(val, "compositor");
+      std::string version = get_str(val, "version");
+      std::string ipc_channel = get_str(val, "ipc_channel");
+      int64_t surfaces_count = get_i64(val, "surfaces_count");
+      double client_fps = get_double(val, "client_fps");
+      int64_t peer_pid = get_i64(val, "peer_pid");
+      std::string app_id = get_str(val, "app_id");
 
       g_autoptr(PigeonRunnerCompositorSystemInfoData) info =
           pigeon_runner_compositor_system_info_data_new(
-              compositor, version, ipc_channel, surfaces_count, client_fps, peer_pid, app_id);
+              compositor.c_str(), version.c_str(), ipc_channel.c_str(), surfaces_count, client_fps, peer_pid, app_id.c_str());
       pigeon_runner_runner_host_ipc_api_respond_get_compositor_info(response_handle, info);
       g_object_unref(response_handle);
     });
@@ -268,17 +286,27 @@ static PigeonRunnerRunnerHostIpcApiVTable runner_host_ipc_api_vtable = {
       return;
     }
     g_object_ref(response_handle);
-    rapidjson::Document params;
-    params.SetObject();
-    s_ipc_client.send_request("ping", params, [response_handle](bool success, const rapidjson::Value& val) {
-      if (!success || !val.IsObject()) {
+    s_ipc_client.send_request("ping", [response_handle](bool success, const simdjson::dom::element& val) {
+      if (!success || !val.is_object()) {
         pigeon_runner_runner_host_ipc_api_respond_ping_compositor(response_handle, nullptr);
         g_object_unref(response_handle);
         return;
       }
-      gboolean pong = (val.HasMember("pong") && val["pong"].IsBool()) ? val["pong"].GetBool() : FALSE;
-      int64_t timestamp_us = (val.HasMember("timestamp_us") && val["timestamp_us"].IsNumber()) ? val["timestamp_us"].GetInt64() : 0;
-      int64_t peer_pid = (val.HasMember("peer_pid") && val["peer_pid"].IsNumber()) ? val["peer_pid"].GetInt64() : 0;
+      gboolean pong = FALSE;
+      auto pong_res = val["pong"];
+      if (!pong_res.error() && pong_res.is_bool()) {
+        pong = pong_res.get_bool().value() ? TRUE : FALSE;
+      }
+      int64_t timestamp_us = 0;
+      auto ts_res = val["timestamp_us"];
+      if (!ts_res.error()) {
+        (void)ts_res.get(timestamp_us);
+      }
+      int64_t peer_pid = 0;
+      auto pid_res = val["peer_pid"];
+      if (!pid_res.error()) {
+        (void)pid_res.get(peer_pid);
+      }
 
       g_autoptr(PigeonRunnerCompositorPongData) pong_data =
           pigeon_runner_compositor_pong_data_new(pong, timestamp_us, peer_pid);
@@ -292,30 +320,53 @@ static PigeonRunnerRunnerHostIpcApiVTable runner_host_ipc_api_vtable = {
       return;
     }
     g_object_ref(response_handle);
-    rapidjson::Document params;
-    params.SetObject();
-    s_ipc_client.send_request("listSurfaces", params, [response_handle](bool success, const rapidjson::Value& val) {
-      if (!success || !val.IsArray()) {
+    s_ipc_client.send_request("listSurfaces", [response_handle](bool success, const simdjson::dom::element& val) {
+      if (!success || !val.is_array()) {
         pigeon_runner_runner_host_ipc_api_respond_list_surfaces(response_handle, nullptr);
         g_object_unref(response_handle);
         return;
       }
 
+      auto get_str = [](const simdjson::dom::element &el, const char *key) -> std::string {
+        auto res = el[key];
+        if (!res.error() && res.is_string()) {
+          auto s = res.get_string();
+          if (!s.error()) return std::string(s.value());
+        }
+        return "";
+      };
+      auto get_i64 = [](const simdjson::dom::element &el, const char *key) -> int64_t {
+        auto res = el[key];
+        if (!res.error()) {
+          int64_t v = 0;
+          if (res.get(v) == simdjson::SUCCESS) return v;
+        }
+        return 0;
+      };
+      auto get_bool = [](const simdjson::dom::element &el, const char *key) -> bool {
+        auto res = el[key];
+        if (!res.error() && res.is_bool()) {
+          bool v = false;
+          if (res.get(v) == simdjson::SUCCESS) return v;
+        }
+        return false;
+      };
+
       g_autoptr(FlValue) surfaces_list = fl_value_new_list();
-      for (const auto& item : val.GetArray()) {
-        if (item.IsObject()) {
-          const char* title = (item.HasMember("title") && item["title"].IsString()) ? item["title"].GetString() : "";
-          int64_t handle = (item.HasMember("handle") && item["handle"].IsNumber()) ? item["handle"].GetInt64() : 0;
-          const char* app_id = (item.HasMember("app_id") && item["app_id"].IsString()) ? item["app_id"].GetString() : "";
-          int64_t width = (item.HasMember("width") && item["width"].IsNumber()) ? item["width"].GetInt64() : 0;
-          int64_t height = (item.HasMember("height") && item["height"].IsNumber()) ? item["height"].GetInt64() : 0;
-          gboolean fullscreen = (item.HasMember("fullscreen") && item["fullscreen"].IsBool()) ? item["fullscreen"].GetBool() : FALSE;
-          gboolean maximized = (item.HasMember("maximized") && item["maximized"].IsBool()) ? item["maximized"].GetBool() : FALSE;
-          gboolean activated = (item.HasMember("activated") && item["activated"].IsBool()) ? item["activated"].GetBool() : FALSE;
+      for (const auto& item : val.get_array().value()) {
+        if (item.is_object()) {
+          std::string title = get_str(item, "title");
+          int64_t handle = get_i64(item, "handle");
+          std::string app_id = get_str(item, "app_id");
+          int64_t width = get_i64(item, "width");
+          int64_t height = get_i64(item, "height");
+          gboolean fullscreen = get_bool(item, "fullscreen") ? TRUE : FALSE;
+          gboolean maximized = get_bool(item, "maximized") ? TRUE : FALSE;
+          gboolean activated = get_bool(item, "activated") ? TRUE : FALSE;
 
           g_autoptr(PigeonRunnerCompositorSurfaceData) surface =
               pigeon_runner_compositor_surface_data_new(
-                  title, handle, app_id, width, height, fullscreen, maximized, activated);
+                  title.c_str(), handle, app_id.c_str(), width, height, fullscreen, maximized, activated);
           fl_value_append_take(
               surfaces_list,
               fl_value_new_custom_object(
@@ -333,13 +384,14 @@ static PigeonRunnerRunnerHostIpcApiVTable runner_host_ipc_api_vtable = {
       return;
     }
     g_object_ref(response_handle);
-    rapidjson::Document params;
-    params.SetObject();
-    params.AddMember("handle", surface_handle, params.GetAllocator());
-    s_ipc_client.send_request("closeSurface", params, [response_handle](bool success, const rapidjson::Value& val) {
+    std::string params = "{\"handle\":" + std::to_string(surface_handle) + "}";
+    s_ipc_client.send_request("closeSurface", params, [response_handle](bool success, const simdjson::dom::element& val) {
       gboolean closed = FALSE;
-      if (success && val.IsObject() && val.HasMember("closed") && val["closed"].IsBool()) {
-        closed = val["closed"].GetBool();
+      if (success && val.is_object()) {
+        auto closed_res = val["closed"];
+        if (!closed_res.error() && closed_res.is_bool()) {
+          closed = closed_res.get_bool().value() ? TRUE : FALSE;
+        }
       }
       pigeon_runner_runner_host_ipc_api_respond_close_surface(response_handle, closed);
       g_object_unref(response_handle);

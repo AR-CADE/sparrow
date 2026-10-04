@@ -1,6 +1,7 @@
 #ifndef OUTPUT_H
 #define OUTPUT_H
 
+#include <mutex>
 #include <sparrow/nonstd/wlroots-full.hpp>
 
 // Forward declarations
@@ -24,7 +25,7 @@ class Output
 
     struct wlr_damage_ring damage_ring;
     pixman_region32_t client_damage;
-    pthread_mutex_t damage_mutex;
+    std::mutex damage_mutex;
 
 #ifdef DAMAGE_HISTORY
     #define NUM_DAMAGE_HISTORY 3
@@ -82,6 +83,7 @@ bool sparrow_set_output_mode(uint32_t output_id, int width,
     int height, int refresh);
 bool sparrow_set_output_position(uint32_t output_id, int x, int y);
 bool sparrow_set_output_scale(uint32_t output_id, double scale);
+bool sparrow_set_output_transform(uint32_t output_id, int transform);
 
 Output *sparrow_get_first_output();
 
@@ -91,6 +93,8 @@ void sparrow_output_manager_update();
 
 // Output power management protocol (wlr_output_power_management_v1)
 void sparrow_output_power_manager_init();
+bool sparrow_has_enabled_output();
+void sparrow_output_update_dpms_lifecycle();
 
 int get_output_refresh(struct wlr_output *output);
 

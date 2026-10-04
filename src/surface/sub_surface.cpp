@@ -1,12 +1,13 @@
-#include "flutter_embedder.h"
 #include "flutter/platform/engine/messages/sub_surface_message.hpp"
+#include "flutter_embedder.h"
+#include <mutex>
 
 #include "core.hpp"
-#include "view.hpp"
+#include "output.hpp"
 #include "sub_surface.hpp"
-
-
-
+#include "surface.hpp"
+#include "util/handle_map.hpp"
+#include "view.hpp"
 static void sparrow_sub_surface_get_root_coords(SparrowSubSurface *sub,
     int *root_x, int *root_y)
 {
@@ -31,7 +32,8 @@ static void sparrow_sub_surface_get_root_coords(SparrowSubSurface *sub,
     *root_y = y;
 }
 
-static void sparrow_subsurface_handle_map(struct wl_listener *listener, void *data)
+static void sparrow_subsurface_handle_map(struct wl_listener *listener,
+    void *data)
 {
     SparrowSubSurface *sub = wl_container_of(listener, sub, map);
     Core *instance = Core::instance();
@@ -75,7 +77,8 @@ static void sparrow_subsurface_handle_map(struct wl_listener *listener, void *da
     // });
 }
 
-static void sparrow_subsurface_handle_unmap(struct wl_listener *listener, void *data)
+static void sparrow_subsurface_handle_unmap(struct wl_listener *listener,
+    void *data)
 {
     SparrowSubSurface *sub = wl_container_of(listener, sub, unmap);
     uint32_t handle = sub->handle;
@@ -108,32 +111,42 @@ void sparrow_subsurface_damage_add_rect(SparrowSubSurface *sub, int x, int y,
     }
 
     SparrowView *view = sub->parent_view;
-    Output *output    = view->current_output ? view->current_output : sparrow_get_first_output();
+    Output *output    =
+        view->current_output ? view->current_output : sparrow_get_first_output();
     if (!output || !output->wlr_output)
     {
         return;
     }
 
-    const int out_w = output->wlr_output->width;
-    const int out_h = output->wlr_output->height;
-
-    const int vis_w = view->width > 0 ? view->width : out_w;
-    const int vis_h = view->height > 0 ? view->height : out_h;
-    const double scale_x = (vis_w > 0) ? ((double)out_w / (double)vis_w) : 1.0;
-    const double scale_y = (vis_h > 0) ? ((double)out_h / (double)vis_h) : 1.0;
-    const double scale   = (scale_x < scale_y) ? scale_x : scale_y;
-
-    const int target_w    = (int)lround(vis_w * scale);
-    const int target_h    = (int)lround(vis_h * scale);
-    const int black_bar_x = (out_w - target_w) / 2;
-    const int black_bar_y = (out_h - target_h) / 2;
-
-    // In Dart, SubSurface widget is placed at `left: sub.x * scale, top: sub.y * scale` inside SurfaceTree
-    // (which is centered with black bars)
-    const int mapped_x = (int)lround(view->x + black_bar_x + (sub->x + x) * scale);
-    const int mapped_y = (int)lround(view->y + black_bar_y + (sub->y + y) * scale);
-    const int mapped_w = (int)lround(width * scale);
-    const int mapped_h = (int)lround(height * scale);
+    struct wlr_box scene_box = {};
+    int mapped_x = 0, mapped_y = 0, mapped_w = 0, mapped_h = 0;
+    if (sparrow_view_get_scene_box(view, &scene_box))
+    {
+        const int base_x = scene_box.x;
+        const int base_y = scene_box.y;
+        if ((scene_box.width > 0) && (view->width > 0) &&
+            ((scene_box.width != view->width) || (scene_box.height != view->height)))
+        {
+            const double scale_x = (double)scene_box.width / (double)view->width;
+            const double scale_y = (double)scene_box.height / (double)view->height;
+            mapped_x = base_x + (int)lround((sub->x + x) * scale_x);
+            mapped_y = base_y + (int)lround((sub->y + y) * scale_y);
+            mapped_w = (int)lround(width * scale_x);
+            mapped_h = (int)lround(height * scale_y);
+        } else
+        {
+            mapped_x = base_x + (sub->x + x);
+            mapped_y = base_y + (sub->y + y);
+            mapped_w = width;
+            mapped_h = height;
+        }
+    } else
+    {
+        mapped_x = view->x + (sub->x + x);
+        mapped_y = view->y + (sub->y + y);
+        mapped_w = width;
+        mapped_h = height;
+    }
 
     struct wlr_box box = {
         .x     = mapped_x,
@@ -144,7 +157,8 @@ void sparrow_subsurface_damage_add_rect(SparrowSubSurface *sub, int x, int y,
     sparrow_damage_add_box(&box, true);
 }
 
-static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void *data)
+static void sparrow_subsurface_handle_commit(struct wl_listener *listener,
+    void *data)
 {
     SparrowSubSurface *sub = wl_container_of(listener, sub, commit);
     Core *instance = Core::instance();
@@ -175,7 +189,8 @@ static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void 
     {
         if (instance->debug_protocol)
         {
-            wlr_log(WLR_DEBUG,
+            wlr_log(
+                WLR_DEBUG,
                 "Subsurface %d sending position update: %dx%d (buf=%dx%d) @ (%d,%d)",
                 sub->handle, sub->width, sub->height, sub->buffer_width,
                 sub->buffer_height, sub->x, sub->y);
@@ -193,34 +208,38 @@ static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void 
         }
     }
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-    struct wlr_buffer *new_buf = nullptr;
-    if (sub->surface && sub->surface->buffer)
+    bool new_buffer_attached = false;
     {
-        new_buf = sub->surface->buffer->source;
-    }
-
-    if (new_buf != sub->locked_buffer)
-    {
-        if (new_buf != nullptr)
+        std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.texture_mutex);
+        struct wlr_buffer *new_buf = nullptr;
+        if (sub->surface && sub->surface->buffer)
         {
-            wlr_buffer_lock(new_buf);
+            new_buf = sub->surface->buffer->source;
         }
 
-        if (sub->locked_buffer != nullptr)
+        new_buffer_attached =
+            (new_buf != nullptr && new_buf != sub->locked_buffer);
+        if (new_buf != sub->locked_buffer)
         {
-            wlr_buffer_unlock(sub->locked_buffer);
+            if (new_buf != nullptr)
+            {
+                wlr_buffer_lock(new_buf);
+            }
+
+            if (sub->locked_buffer != nullptr)
+            {
+                wlr_buffer_unlock(sub->locked_buffer);
+            }
+
+            sub->locked_buffer = new_buf;
         }
-
-        sub->locked_buffer = new_buf;
     }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     // Notify Flutter and add damage for any mapped subsurface
     if (sub->surface && sub->surface->mapped)
     {
-        bool is_visible = !sub->parent_view || sparrow_view_is_visible(sub->parent_view);
+        bool is_visible =
+            !sub->parent_view || sparrow_view_is_visible(sub->parent_view);
 
         // Notify Flutter that texture has new frame
         if (is_visible && sub->texture_registered)
@@ -241,19 +260,28 @@ static void sparrow_subsurface_handle_commit(struct wl_listener *listener, void 
                 {
                     struct timespec ts;
                     clock_gettime(CLOCK_MONOTONIC, &ts);
-                    uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
+                    uint64_t now_us =
+                        (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
                     instance->record_client_commit(now_us);
+                }
+
+                if (sub->parent_view)
+                {
+                    sparrow_notify_redraw_activity(sub->parent_view, &damage);
                 }
 
                 int nrects = 0;
                 pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
                 for (int i = 0; i < nrects; ++i)
                 {
-                    sparrow_subsurface_damage_add_rect(
-                        sub, rects[i].x1, rects[i].y1,
-                        rects[i].x2 - rects[i].x1, rects[i].y2 - rects[i].y1);
+                    sparrow_subsurface_damage_add_rect(sub, rects[i].x1, rects[i].y1,
+                        rects[i].x2 - rects[i].x1,
+                        rects[i].y2 - rects[i].y1);
                 }
             }
+        } else if (is_visible && new_buffer_attached && sub->parent_view)
+        {
+            sparrow_notify_redraw_activity(sub->parent_view, nullptr);
         }
 
         pixman_region32_fini(&damage);
@@ -268,44 +296,44 @@ static void sparrow_subsurface_handle_destroy(struct wl_listener *listener,
 
     wlr_log(WLR_INFO, "Subsurface DESTROY: handle=%d", sub->handle);
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-
-    if (sub->locked_buffer != nullptr)
     {
-        wlr_buffer_unlock(sub->locked_buffer);
-        sub->locked_buffer = nullptr;
+        std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.texture_mutex);
+
+        if (sub->locked_buffer != nullptr)
+        {
+            wlr_buffer_unlock(sub->locked_buffer);
+            sub->locked_buffer = nullptr;
+        }
+
+        // Unregister texture
+        if (sub->texture_registered)
+        {
+            instance->embedder_api.UnregisterExternalTexture(instance->engine,
+                sub->texture_id);
+            sub->texture_registered = false;
+        }
+
+        // Remove from handle map
+        handle_map_remove(instance->subsurfaces, sub->handle);
+
+        // Remove from parent view list if still linked
+        if ((sub->link.next != nullptr) && (sub->link.prev != nullptr))
+        {
+            wl_list_remove(&sub->link);
+            wl_list_init(&sub->link);
+        }
+
+        // Remove listeners
+        wl_list_remove(&sub->map.link);
+        wl_list_remove(&sub->unmap.link);
+        wl_list_remove(&sub->destroy.link);
+        wl_list_remove(&sub->commit.link);
+        if (sub->new_subsurface.link.next && sub->new_subsurface.link.prev)
+        {
+            wl_list_remove(&sub->new_subsurface.link);
+            wl_list_init(&sub->new_subsurface.link);
+        }
     }
-
-    // Unregister texture
-    if (sub->texture_registered)
-    {
-        instance->embedder_api.UnregisterExternalTexture(instance->engine,
-            sub->texture_id);
-        sub->texture_registered = false;
-    }
-
-    // Remove from handle map
-    handle_map_remove(instance->subsurfaces, sub->handle);
-
-    // Remove from parent view list if still linked
-    if ((sub->link.next != nullptr) && (sub->link.prev != nullptr))
-    {
-        wl_list_remove(&sub->link);
-        wl_list_init(&sub->link);
-    }
-
-    // Remove listeners
-    wl_list_remove(&sub->map.link);
-    wl_list_remove(&sub->unmap.link);
-    wl_list_remove(&sub->destroy.link);
-    wl_list_remove(&sub->commit.link);
-    if (sub->new_subsurface.link.next && sub->new_subsurface.link.prev)
-    {
-        wl_list_remove(&sub->new_subsurface.link);
-        wl_list_init(&sub->new_subsurface.link);
-    }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     delete sub;
 }
@@ -325,7 +353,8 @@ static void sparrow_subsurface_handle_new_on_subsurface(struct wl_listener *list
     }
 }
 
-SparrowSubSurface *sparrow_subsurface_create(SparrowView *view, struct wlr_subsurface *wlr_subsurface)
+SparrowSubSurface *sparrow_subsurface_create(SparrowView *view,
+    struct wlr_subsurface *wlr_subsurface)
 {
     if ((view == nullptr) || (wlr_subsurface == nullptr) ||
         (wlr_subsurface->surface == nullptr))
@@ -356,8 +385,7 @@ SparrowSubSurface *sparrow_subsurface_create(SparrowView *view, struct wlr_subsu
     sub->surface = wlr_subsurface->surface;
 
     // Add to handle map for texture lookup
-    sub->handle =
-        handle_map_add(instance->subsurfaces, static_cast<void*>(sub));
+    sub->handle = handle_map_add(instance->subsurfaces, static_cast<void*>(sub));
 
     // Add to parent's subsurface list
     wl_list_insert(&view->subsurfaces, &sub->link);

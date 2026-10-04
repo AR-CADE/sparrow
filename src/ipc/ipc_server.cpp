@@ -7,9 +7,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include <rapidjson/document.h>
-#include <rapidjson/stringbuffer.h>
-#include <rapidjson/writer.h>
+#include <simdjson.h>
 
 #include "core.hpp"
 #include "sparrow-ipc-v1-protocol.h"
@@ -189,28 +187,91 @@ void IpcServer::process_client_data(ClientConnection *conn)
     }
 }
 
+static std::string escape_json_str(const char *src)
+{
+    if (!src)
+    {
+        return "";
+    }
+
+    std::string out;
+    out.reserve(strlen(src) + 8);
+    for (const char *p = src; *p; ++p)
+    {
+        switch (*p)
+        {
+          case '"':
+            out += "\\\"";
+            break;
+
+          case '\\':
+            out += "\\\\";
+            break;
+
+          case '\b':
+            out += "\\b";
+            break;
+
+          case '\f':
+            out += "\\f";
+            break;
+
+          case '\n':
+            out += "\\n";
+            break;
+
+          case '\r':
+            out += "\\r";
+            break;
+
+          case '\t':
+            out += "\\t";
+            break;
+
+          default:
+            if (static_cast<unsigned char>(*p) < 0x20)
+            {
+                char hex[8];
+                snprintf(hex, sizeof(hex), "\\u%04x", static_cast<unsigned char>(*p));
+                out += hex;
+            } else
+            {
+                out += *p;
+            }
+
+            break;
+        }
+    }
+
+    return out;
+}
+
 void IpcServer::handle_json_message(ClientConnection *conn, const std::string & line)
 {
     SPARROW_TRACE_SCOPE("ipc", "IpcServer::handle_json_message");
-    rapidjson::Document doc;
-    doc.Parse(line.c_str());
+    thread_local simdjson::dom::parser parser;
+    auto doc_res = parser.parse_unpadded(line);
 
-    if (doc.HasParseError() || !doc.IsObject())
+    if (doc_res.error() || !doc_res.value().is_object())
     {
         wlr_log(WLR_ERROR, "[sparrow-ipc] Invalid JSON received from client: %s", line.c_str());
         return;
     }
 
+    auto doc = doc_res.value();
+
     int64_t msg_id = 0;
-    if (doc.HasMember("id") && doc["id"].IsInt64())
+    auto id_res    = doc["id"];
+    if (!id_res.error() && (id_res.value().is_int64() || id_res.value().is_uint64()))
     {
-        msg_id = doc["id"].GetInt64();
+        msg_id = id_res.value().get_int64().value();
     }
 
     std::string method;
-    if (doc.HasMember("method") && doc["method"].IsString())
+    auto method_res = doc["method"];
+    if (!method_res.error() && method_res.value().is_string())
     {
-        method = doc["method"].GetString();
+        method = std::string(method_res.value().get_string().value());
     }
 
     wlr_log(WLR_INFO, "[sparrow-ipc] Request [%s] (id=%" PRId64 ") from app '%s'",
@@ -222,18 +283,9 @@ void IpcServer::handle_json_message(ClientConnection *conn, const std::string & 
         gettimeofday(&tv, nullptr);
         uint64_t now_us = static_cast<uint64_t>(tv.tv_sec) * 1000000ULL + tv.tv_usec;
 
-        rapidjson::StringBuffer s;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(s);
-        writer.StartObject();
-        writer.Key("pong");
-        writer.Bool(true);
-        writer.Key("timestamp_us");
-        writer.Uint64(now_us);
-        writer.Key("peer_pid");
-        writer.Int(conn->peer_pid);
-        writer.EndObject();
-
-        send_response(conn, msg_id, s.GetString());
+        std::string s = "{\"pong\":true,\"timestamp_us\":" + std::to_string(now_us) +
+            ",\"peer_pid\":" + std::to_string(conn->peer_pid) + "}";
+        send_response(conn, msg_id, s);
     } else if (method == "getCompositorInfo")
     {
         struct timeval tv;
@@ -247,69 +299,60 @@ void IpcServer::handle_json_message(ClientConnection *conn, const std::string & 
             surface_count++;
         }
 
-        rapidjson::StringBuffer s;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(s);
-        writer.StartObject();
-        writer.Key("compositor");
-        writer.String("sparrow");
-        writer.Key("version");
-        writer.String("0.2.0");
-        writer.Key("ipc_channel");
-        writer.String("anonymous_socketpair (kernel isolated, zero disk file)");
-        writer.Key("surfaces_count");
-        writer.Uint64(surface_count);
-        writer.Key("client_fps");
-        writer.Double(core_->get_client_fps(now_us));
-        writer.Key("app_id");
-        writer.String(conn->app_id.c_str());
-        writer.Key("peer_pid");
-        writer.Int(conn->peer_pid);
-        writer.EndObject();
+        char fps_buf[32];
+        snprintf(fps_buf, sizeof(fps_buf), "%.2f", core_->get_client_fps(now_us));
 
-        send_response(conn, msg_id, s.GetString());
+        std::string s = "{\"compositor\":\"sparrow\",\"version\":\"0.2.0\",\"ipc_channel\":"
+                        "\"anonymous_socketpair (kernel isolated, zero disk file)\","
+                        "\"surfaces_count\":" + std::to_string(surface_count) + ","
+                                                                                "\"client_fps\":" + fps_buf +
+            ","
+            "\"app_id\":\"" +
+            escape_json_str(conn->app_id.c_str()) + "\","
+                                                    "\"peer_pid\":" +
+            std::to_string(conn->peer_pid) + "}";
+        send_response(conn, msg_id, s);
     } else if (method == "listSurfaces")
     {
-        rapidjson::StringBuffer s;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(s);
-        writer.StartArray();
+        std::string s = "[";
+        bool first    = true;
 
         SparrowView *view;
         wl_list_for_each(view, &core_->views_list, link)
         {
             if (view->toplevel)
             {
-                writer.StartObject();
-                writer.Key("handle");
-                writer.Uint(view->handle);
-                writer.Key("title");
-                writer.String(view->toplevel->title ? view->toplevel->title : "");
-                writer.Key("app_id");
-                writer.String(view->toplevel->app_id ? view->toplevel->app_id : "");
-                writer.Key("width");
-                writer.Int(view->width);
-                writer.Key("height");
-                writer.Int(view->height);
-                writer.Key("maximized");
-                writer.Bool(view->maximized);
-                writer.Key("fullscreen");
-                writer.Bool(view->fullscreen);
-                writer.Key("activated");
-                writer.Bool(view->activated);
-                writer.EndObject();
+                if (!first)
+                {
+                    s += ",";
+                }
+
+                first = false;
+                s    += "{\"handle\":" + std::to_string(view->handle) +
+                    ",\"title\":\"" + escape_json_str(view->toplevel->title ? view->toplevel->title : "") +
+                    "\"" +
+                    ",\"app_id\":\"" + escape_json_str(view->toplevel->app_id ? view->toplevel->app_id : "") +
+                    "\"" +
+                    ",\"width\":" + std::to_string(view->width) +
+                    ",\"height\":" + std::to_string(view->height) +
+                    ",\"maximized\":" + (view->maximized ? "true" : "false") +
+                    ",\"fullscreen\":" + (view->fullscreen ? "true" : "false") +
+                    ",\"activated\":" + (view->activated ? "true" : "false") + "}";
             }
         }
 
-        writer.EndArray();
-        send_response(conn, msg_id, s.GetString());
+        s += "]";
+        send_response(conn, msg_id, s);
     } else if (method == "closeSurface")
     {
         bool found = false;
-        if (doc.HasMember("params") && doc["params"].IsObject())
+        auto params_res = doc["params"];
+        if (!params_res.error() && params_res.value().is_object())
         {
-            const auto & params = doc["params"];
-            if (params.HasMember("handle") && params["handle"].IsUint())
+            auto handle_res = params_res.value()["handle"];
+            if (!handle_res.error() && (handle_res.value().is_int64() || handle_res.value().is_uint64()))
             {
-                uint32_t handle = params["handle"].GetUint();
+                uint32_t handle = static_cast<uint32_t>(handle_res.value().get_uint64().value());
                 SparrowView *view;
                 wl_list_for_each(view, &core_->views_list, link)
                 {
@@ -323,13 +366,8 @@ void IpcServer::handle_json_message(ClientConnection *conn, const std::string & 
             }
         }
 
-        rapidjson::StringBuffer s;
-        rapidjson::Writer<rapidjson::StringBuffer> writer(s);
-        writer.StartObject();
-        writer.Key("closed");
-        writer.Bool(found);
-        writer.EndObject();
-        send_response(conn, msg_id, s.GetString());
+        std::string s = std::string("{\"closed\":") + (found ? "true" : "false") + "}";
+        send_response(conn, msg_id, s);
     } else
     {
         send_response(conn, msg_id, "{\"error\": \"Method not found\"}", true);

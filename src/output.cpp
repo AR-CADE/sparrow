@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <mutex>
 #include <string>
 
 #include <drm_fourcc.h>
@@ -9,15 +11,19 @@
 #include <sparrow/nonstd/wlroots-full.hpp>
 
 #include "core.hpp"
+#include "flutter/platform/engine.hpp"
 #include "flutter/platform/engine/messages/output_message.hpp"
 #include "flutter/platform/task.hpp"
 #include "output.hpp"
 #include "renderer/renderer.hpp"
 #include "surface/popup.hpp"
+#include "surface/session_lock.hpp"
 #include "surface/sub_surface.hpp"
 #include "surface/surface.hpp"
 #include "surface/view.hpp"
+#include "util/handle_map.hpp"
 #include "util/trace.hpp"
+#include "util/udmabuf.hpp"
 
 // Get output refresh rate in mHz
 int get_output_refresh(struct wlr_output *output)
@@ -66,7 +72,8 @@ void sparrow_select_highest_refresh_output()
 }
 
 #ifdef DAMAGE_HISTORY
-void sparrow_output_damage_history_reset(Output *output, int width, int height)
+void sparrow_output_damage_history_reset(Output *output, int width,
+    int height)
 {
     if (!output)
     {
@@ -123,25 +130,36 @@ void sparrow_damage_add_box(const struct wlr_box *box, bool is_client_damage)
                 local_box.width = intersection.width;
                 local_box.height = intersection.height;
 
+                if (output->wlr_output->scale != 1.0)
+                {
+                    local_box.x     = (int)round(local_box.x * output->wlr_output->scale);
+                    local_box.y     = (int)round(local_box.y * output->wlr_output->scale);
+                    local_box.width =
+                        (int)round(local_box.width * output->wlr_output->scale);
+                    local_box.height =
+                        (int)round(local_box.height * output->wlr_output->scale);
+                }
+
                 if (output->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
                 {
                     int tw = 0, th = 0;
                     wlr_output_transformed_resolution(output->wlr_output, &tw, &th);
-                    wlr_box_transform(&local_box, &local_box,
-                        wlr_output_transform_invert(output->wlr_output->transform),
-                        tw, th);
+                    wlr_box_transform(
+                        &local_box, &local_box,
+                        wlr_output_transform_invert(output->wlr_output->transform), tw,
+                        th);
                 }
 
-                pthread_mutex_lock(&output->damage_mutex);
-                wlr_damage_ring_add_box(&output->damage_ring, &local_box);
-                if (is_client_damage)
                 {
-                    pixman_region32_union_rect(&output->client_damage, &output->client_damage,
-                        local_box.x, local_box.y,
-                        local_box.width, local_box.height);
+                    std::lock_guard<std::mutex> lock(output->damage_mutex);
+                    wlr_damage_ring_add_box(&output->damage_ring, &local_box);
+                    if (is_client_damage)
+                    {
+                        pixman_region32_union_rect(
+                            &output->client_damage, &output->client_damage, local_box.x,
+                            local_box.y, local_box.width, local_box.height);
+                    }
                 }
-
-                pthread_mutex_unlock(&output->damage_mutex);
 
                 if (is_main_thread)
                 {
@@ -155,16 +173,16 @@ void sparrow_damage_add_box(const struct wlr_box *box, bool is_client_damage)
             local_box.width = output->wlr_output->width;
             local_box.height = output->wlr_output->height;
 
-            pthread_mutex_lock(&output->damage_mutex);
-            wlr_damage_ring_add_box(&output->damage_ring, &local_box);
-            if (is_client_damage)
             {
-                pixman_region32_union_rect(&output->client_damage, &output->client_damage,
-                    local_box.x, local_box.y,
-                    local_box.width, local_box.height);
+                std::lock_guard<std::mutex> lock(output->damage_mutex);
+                wlr_damage_ring_add_box(&output->damage_ring, &local_box);
+                if (is_client_damage)
+                {
+                    pixman_region32_union_rect(
+                        &output->client_damage, &output->client_damage, local_box.x,
+                        local_box.y, local_box.width, local_box.height);
+                }
             }
-
-            pthread_mutex_unlock(&output->damage_mutex);
 
             if (is_main_thread)
             {
@@ -229,8 +247,7 @@ static Output *find_output_by_id(uint32_t output_id)
 }
 
 // Multi-monitor support: determine which output a box is on (by center point)
-Output *sparrow_output_for_box(int x, int y, int width,
-    int height)
+Output *sparrow_output_for_box(int x, int y, int width, int height)
 {
     Core *instance = Core::instance();
 
@@ -262,8 +279,8 @@ Output *sparrow_output_for_box(int x, int y, int width,
 }
 
 // Set output mode (resolution + refresh rate)
-bool sparrow_set_output_mode(uint32_t output_id, int width,
-    int height, int refresh)
+bool sparrow_set_output_mode(uint32_t output_id, int width, int height,
+    int refresh)
 {
     Output *sparrow_out = find_output_by_id(output_id);
     if (sparrow_out == nullptr)
@@ -312,10 +329,16 @@ bool sparrow_set_output_mode(uint32_t output_id, int width,
 
     wlr_output_state_finish(&state);
 #ifdef DAMAGE_HISTORY
-    sparrow_output_damage_history_reset(sparrow_out, best_mode->width, best_mode->height);
+    sparrow_output_damage_history_reset(sparrow_out, best_mode->width,
+        best_mode->height);
 #endif
     wlr_log(WLR_INFO, "Set output %s mode to %dx%d@%d", wlr_out->name,
         best_mode->width, best_mode->height, best_mode->refresh);
+    if (sparrow_is_session_locked())
+    {
+        sparrow_session_lock_configure_output(sparrow_out);
+    }
+
     sparrow_output_manager_update();
     return true;
 }
@@ -363,7 +386,138 @@ bool sparrow_set_output_scale(uint32_t output_id, double scale)
 
     wlr_output_state_finish(&state);
     wlr_log(WLR_INFO, "Set output %s scale to %.2f", wlr_out->name, scale);
+    if (sparrow_is_session_locked())
+    {
+        sparrow_session_lock_configure_output(sparrow_out);
+    }
+
     sparrow_output_manager_update();
+    return true;
+}
+
+// Set output transform (orientation)
+bool sparrow_set_output_transform(uint32_t output_id, int transform)
+{
+    Output *sparrow_out = find_output_by_id(output_id);
+    if (sparrow_out == nullptr)
+    {
+        wlr_log(WLR_ERROR, "Output id %d not found", output_id);
+        return false;
+    }
+
+    struct wlr_output *wlr_out  = sparrow_out->wlr_output;
+    enum wl_output_transform tr =
+        static_cast<enum wl_output_transform>(transform);
+
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_transform(&state, tr);
+
+    if (!wlr_output_commit_state(wlr_out, &state))
+    {
+        wlr_log(WLR_ERROR, "Failed to set transform for output %s", wlr_out->name);
+        wlr_output_state_finish(&state);
+        return false;
+    }
+
+    wlr_output_state_finish(&state);
+
+#ifdef DAMAGE_HISTORY
+    sparrow_output_damage_history_reset(sparrow_out, wlr_out->width,
+        wlr_out->height);
+#endif
+
+    wlr_log(WLR_INFO, "Set output %s transform to %d", wlr_out->name, transform);
+    sparrow_output_manager_update();
+
+    Core *instance = Core::instance();
+    if (instance != nullptr)
+    {
+        struct wlr_box total_box = {};
+        wlr_output_layout_get_box(instance->output_layout, nullptr, &total_box);
+
+        if ((total_box.width > 0) && (total_box.height > 0))
+        {
+            if (instance->cursor != nullptr)
+            {
+                double clamped_x = std::clamp(instance->cursor->x, 0.0,
+                    static_cast<double>(total_box.width - 1));
+                double clamped_y =
+                    std::clamp(instance->cursor->y, 0.0,
+                        static_cast<double>(total_box.height - 1));
+                if ((clamped_x != instance->cursor->x) ||
+                    (clamped_y != instance->cursor->y))
+                {
+                    wlr_cursor_warp(instance->cursor, nullptr, clamped_x, clamped_y);
+                }
+            }
+
+            if (instance->engine != nullptr)
+            {
+                FlutterWindowMetricsEvent window_metrics = {};
+                window_metrics.struct_size = sizeof(FlutterWindowMetricsEvent);
+                window_metrics.width  = total_box.width;
+                window_metrics.height = total_box.height;
+                window_metrics.pixel_ratio = 1.0;
+                if (instance->embedder_api.SendWindowMetricsEvent != nullptr)
+                {
+                    instance->embedder_api.SendWindowMetricsEvent(instance->engine,
+                        &window_metrics);
+                }
+
+                send_output_changed(sparrow_out);
+
+                SparrowView *view = nullptr;
+                wl_list_for_each(view, &instance->views_list, link)
+                {
+                    if ((view->xdg_surface != nullptr) &&
+                        view->xdg_surface->initialized &&
+                        (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
+                        (view->toplevel != nullptr) && view->maximized)
+                    {
+                        Output *out = view->current_output ? view->current_output :
+                            sparrow_get_first_output();
+                        if (out && out->wlr_output)
+                        {
+                            int eff_w = 0, eff_h = 0;
+                            wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
+                            const bool is_wleird = (!view->toplevel->app_id ||
+                                view->toplevel->app_id[0] == '\0');
+                            if (is_wleird && (eff_h > eff_w))
+                            {
+                                eff_h -= 1;
+                            }
+
+                            if ((view->pending_width != eff_w) || (view->pending_height != eff_h))
+                            {
+                                view->pending_width  = eff_w;
+                                view->pending_height = eff_h;
+                                wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                            }
+                        }
+
+                        if (view->xdg_surface && view->xdg_surface->surface &&
+                            view->xdg_surface->surface->mapped)
+                        {
+                            view->last_buffer_width  = 0;
+                            view->last_buffer_height = 0;
+                            sparrow_view_damage_whole(view);
+                        }
+                    }
+                }
+
+                sparrow_popups_update_on_output_change(sparrow_out);
+            }
+
+            if (sparrow_is_session_locked())
+            {
+                sparrow_session_lock_configure_output(sparrow_out);
+            }
+        }
+
+        sparrow_damage_add_box(nullptr);
+    }
+
     return true;
 }
 
@@ -554,7 +708,8 @@ static void send_presentation_iterator(struct wlr_surface *surface, int sx,
     int sy, void *data)
 {
     struct wlr_output *wlr_output = static_cast<struct wlr_output*>(data);
-    if ((wlr_output != nullptr) && (surface != nullptr) && (surface->buffer != nullptr))
+    if ((wlr_output != nullptr) && (surface != nullptr) &&
+        (surface->buffer != nullptr))
     {
         wlr_presentation_surface_textured_on_output(surface, wlr_output);
     }
@@ -570,19 +725,21 @@ static void send_frame_done_iterator(struct wlr_surface *surface, int sx,
 static SparrowView *sparrow_output_find_fullscreen_candidate(const Output *output)
 {
     Core *instance = Core::instance();
-    if (!output || !output->wlr_output || !output->wlr_output->enabled)
+    if (!output || !output->wlr_output || !output->wlr_output->enabled ||
+        sparrow_is_session_locked())
     {
         return nullptr;
     }
 
-    // If Overview (force_render_all_views) or Gestures are active, direct mode must yield to Flutter
-    // compositing
+    // If Overview (force_render_all_views) or Gestures are active, direct mode
+    // must yield to Flutter compositing
     if (instance->force_render_all_views || instance->gesture_active)
     {
         return nullptr;
     }
 
-    // If popups or menus are active, direct mode must yield to Flutter compositing
+    // If popups or menus are active, direct mode must yield to Flutter
+    // compositing
     if (instance->popups && !instance->popups->empty())
     {
         for (const auto &[handle, value] : *instance->popups)
@@ -596,7 +753,8 @@ static SparrowView *sparrow_output_find_fullscreen_candidate(const Output *outpu
         }
     }
 
-    // If Flutter is actively animating or updating its scene, yield to Flutter compositing
+    // If Flutter is actively animating or updating its scene, yield to Flutter
+    // compositing
     if (instance->sparrow_renderer.current_scene.needs_update)
     {
         return nullptr;
@@ -621,14 +779,16 @@ static SparrowView *sparrow_output_find_fullscreen_candidate(const Output *outpu
             continue;
         }
 
-        // Only an ACTIVATED, FULLSCREEN window WITHOUT SSD titlebar/decorations can be a direct candidate
+        // Only an ACTIVATED, FULLSCREEN window WITHOUT SSD titlebar/decorations can
+        // be a direct candidate
         if (view->fullscreen && view->activated && !view->uses_ssd)
         {
             const struct wlr_buffer *target_buf = view->locked_buffer;
             SparrowSubSurface *sub = nullptr;
             wl_list_for_each(sub, &view->subsurfaces, link)
             {
-                if (sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
+                if (sub->surface && sub->surface->mapped &&
+                    (sub->locked_buffer != nullptr))
                 {
                     target_buf = sub->locked_buffer;
                     break;
@@ -912,7 +1072,8 @@ static uint8_t get_glyph_5x7(char c, int row)
     }
 }
 
-static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rect_count, uint64_t now_us)
+static void prepare_fps_osd(Output *output, int out_w, int out_h,
+    int damage_rect_count, uint64_t now_us)
 {
     if (!output)
     {
@@ -939,26 +1100,30 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
         buf_tag = output->triple_buffering_active ? " | TB:AUTO" : " | DB:AUTO";
     }
 
-    const char *scanout_tag = output->direct_mode_active ? " | DS:ON" : " | DS:OFF";
+    const char *scanout_tag =
+        output->direct_mode_active ? " | DS:ON" : " | DS:OFF";
 
     char text[96];
     if (client_fps > 0.0)
     {
         if (damage_rect_count > 0)
         {
-            snprintf(text, sizeof(text), "%.1f FPS | %.1fms | D:%d%s%s",
-                client_fps, output->smoothed_render_ms, damage_rect_count, buf_tag, scanout_tag);
+            snprintf(text, sizeof(text), "%.1f FPS | %.1fms | D:%d%s%s", client_fps,
+                output->smoothed_render_ms, damage_rect_count, buf_tag,
+                scanout_tag);
         } else
         {
-            snprintf(text, sizeof(text), "%.1f FPS | %.1fms%s%s",
-                client_fps, output->smoothed_render_ms, buf_tag, scanout_tag);
+            snprintf(text, sizeof(text), "%.1f FPS | %.1fms%s%s", client_fps,
+                output->smoothed_render_ms, buf_tag, scanout_tag);
         }
     } else
     {
         snprintf(text, sizeof(text), "0.0 FPS | 0.0ms%s%s", buf_tag, scanout_tag);
     }
 
-    if ((output == instance->vsync_output) || (instance->vsync_output == nullptr))
+#ifdef DEBUG
+    if ((output == instance->vsync_output) ||
+        (instance->vsync_output == nullptr))
     {
         static double last_logged_fps = -1.0;
         static uint64_t last_fps_log_time_us = 0;
@@ -971,6 +1136,8 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
             wlr_log(WLR_INFO, "[FPS] %s", text);
         }
     }
+
+#endif
 
     int text_len = 0;
     for (const char *p = text; *p != '\0'; ++p)
@@ -990,7 +1157,8 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
     const int box_h = 14 + pad_y * 2;
 
     // Re-generate texture only if text changed or texture is null
-    if ((output->osd_texture == nullptr) || (strcmp(output->last_osd_text, text) != 0))
+    if ((output->osd_texture == nullptr) ||
+        (strcmp(output->last_osd_text, text) != 0))
     {
         if (output->osd_texture != nullptr)
         {
@@ -1000,8 +1168,9 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
 
         strncpy(output->last_osd_text, text, sizeof(output->last_osd_text) - 1);
 
-        std::vector<uint32_t> pixels(static_cast<size_t>(box_w) * static_cast<size_t>(box_h));
-        uint32_t bg_color     = 0xD80D141F; // Dark translucent pill
+        std::vector<uint32_t> pixels(static_cast<size_t>(box_w) *
+            static_cast<size_t>(box_h));
+        uint32_t bg_color     = 0xD80D141F;     // Dark translucent pill
         uint32_t border_color = 0x9900CCFF; // Cyan border
 
         for (int y = 0; y < box_h; ++y)
@@ -1117,34 +1286,167 @@ static void prepare_fps_osd(Output *output, int out_w, int out_h, int damage_rec
             cur_x += (5 + 1) * 2;
         }
 
-        output->osd_texture = wlr_texture_from_pixels(
-            instance->renderer, DRM_FORMAT_ARGB8888, box_w * 4, box_w, box_h, pixels.data());
+        output->osd_texture =
+            wlr_texture_from_pixels(instance->renderer, DRM_FORMAT_ARGB8888,
+                box_w * 4, box_w, box_h, pixels.data());
     }
 }
 
-static void render_fps_osd(struct wlr_render_pass *render_pass, Output *output,
-    int out_w, int out_h)
+static struct wlr_box get_fps_osd_buffer_box(Output *output)
 {
-    if (!output || !render_pass || !output->osd_texture)
+    if (!output || !output->wlr_output)
+    {
+        return {0, 0, 0, 0};
+    }
+
+    int box_w = output->osd_texture ? output->osd_texture->width : 420;
+    int box_h = output->osd_texture ? output->osd_texture->height : 60;
+
+    int trans_w = 0, trans_h = 0;
+    wlr_output_transformed_resolution(output->wlr_output, &trans_w, &trans_h);
+
+    struct wlr_box osd_box = {
+        .x     = trans_w - box_w - 16,
+        .y     = 16,
+        .width = box_w,
+        .height = box_h,
+    };
+
+    if (output->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL)
+    {
+        wlr_box_transform(
+            &osd_box, &osd_box,
+            wlr_output_transform_invert(output->wlr_output->transform), trans_w,
+            trans_h);
+    }
+
+    return osd_box;
+}
+
+static void render_fps_osd(struct wlr_render_pass *render_pass,
+    Output *output)
+{
+    if (!output || !render_pass || !output->osd_texture || !output->wlr_output)
     {
         return;
     }
 
-    int box_w = output->osd_texture->width;
-    int box_h = output->osd_texture->height;
-    int box_x = out_w - box_w - 16;
-    int box_y = 16;
+    struct wlr_box osd_box = get_fps_osd_buffer_box(output);
 
     struct wlr_render_texture_options opts = {
         .texture   = output->osd_texture,
-        .dst_box   = {
-            .x     = box_x,
-            .y     = box_y,
-            .width = box_w,
-            .height = box_h,
-        },
+        .dst_box   = osd_box,
+        .transform = output->wlr_output->transform,
     };
     wlr_render_pass_add_texture(render_pass, &opts);
+}
+
+struct LockSurfaceRenderData
+{
+    struct wlr_render_pass *render_pass = nullptr;
+    Output *output = nullptr;
+    struct wlr_surface *root_surface = nullptr;
+};
+
+static void render_lock_surface_iterator(struct wlr_surface *surface, int sx,
+    int sy, void *data)
+{
+    auto *rdata = static_cast<LockSurfaceRenderData*>(data);
+    if (!surface || !rdata || !rdata->render_pass || !rdata->output ||
+        !rdata->output->wlr_output)
+    {
+        return;
+    }
+
+    struct wlr_output *wlr_output = rdata->output->wlr_output;
+    struct wlr_texture *tex = wlr_surface_get_texture(surface);
+    if (tex == nullptr)
+    {
+        tex = sparrow_surface_get_texture(surface);
+    }
+
+    if (tex == nullptr)
+    {
+        return;
+    }
+
+    struct wlr_box dst_box;
+    if (surface == rdata->root_surface)
+    {
+        int eff_w = 0, eff_h = 0;
+        wlr_output_effective_resolution(wlr_output, &eff_w, &eff_h);
+
+        const bool orientation_mismatch =
+            (eff_w > 0 && eff_h > 0 && surface->current.width > 0 &&
+                surface->current.height > 0) &&
+            ((eff_w > eff_h) != (surface->current.width > surface->current.height));
+
+        if (orientation_mismatch)
+        {
+            int trans_width  = wlr_output->width;
+            int trans_height = wlr_output->height;
+            wlr_output_transform_coords(wlr_output->transform, &trans_width,
+                &trans_height);
+
+            double s_fit = std::min(
+                static_cast<double>(eff_w) / surface->current.width,
+                static_cast<double>(eff_h) / surface->current.height);
+            int fit_w    = static_cast<int>(round(surface->current.width * s_fit));
+            int fit_h    = static_cast<int>(round(surface->current.height * s_fit));
+            int offset_x = (eff_w - fit_w) / 2;
+            int offset_y = (eff_h - fit_h) / 2;
+
+            struct wlr_box box = {
+                .x     = static_cast<int>(round(offset_x * wlr_output->scale)),
+                .y     = static_cast<int>(round(offset_y * wlr_output->scale)),
+                .width = static_cast<int>(round(fit_w * wlr_output->scale)),
+                .height = static_cast<int>(round(fit_h * wlr_output->scale)),
+            };
+            enum wl_output_transform transform =
+                wlr_output_transform_invert(wlr_output->transform);
+            wlr_box_transform(&dst_box, &box, transform, trans_width, trans_height);
+        } else
+        {
+            dst_box.x     = 0;
+            dst_box.y     = 0;
+            dst_box.width = wlr_output->width;
+            dst_box.height = wlr_output->height;
+        }
+    } else
+    {
+        int trans_width  = wlr_output->width;
+        int trans_height = wlr_output->height;
+        wlr_output_transform_coords(wlr_output->transform, &trans_width,
+            &trans_height);
+
+        struct wlr_box box = {
+            .x     = (int)round(sx * wlr_output->scale),
+            .y     = (int)round(sy * wlr_output->scale),
+            .width = (int)round(surface->current.width * wlr_output->scale),
+            .height = (int)round(surface->current.height * wlr_output->scale),
+        };
+        enum wl_output_transform transform =
+            wlr_output_transform_invert(wlr_output->transform);
+        wlr_box_transform(&dst_box, &box, transform, trans_width, trans_height);
+    }
+
+    enum wl_output_transform transform =
+        wlr_output_transform_invert(surface->current.transform);
+    transform = wlr_output_transform_compose(transform, wlr_output->transform);
+
+    struct wlr_render_texture_options opts = {
+        .texture    = tex,
+        .dst_box    = dst_box,
+        .transform  = transform,
+        .blend_mode = WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
+    };
+
+    if (surface->current.viewport.has_src)
+    {
+        opts.src_box = surface->current.viewport.src;
+    }
+
+    wlr_render_pass_add_texture(rdata->render_pass, &opts);
 }
 
 static void output_frame(struct wl_listener *listener, void *data)
@@ -1161,16 +1463,36 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     struct timespec t_frame_start;
     clock_gettime(CLOCK_MONOTONIC, &t_frame_start);
-    uint64_t now_us = (uint64_t)t_frame_start.tv_sec * 1000000ULL + (t_frame_start.tv_nsec / 1000);
+    uint64_t now_us = (uint64_t)t_frame_start.tv_sec * 1000000ULL +
+        (t_frame_start.tv_nsec / 1000);
 
-    pthread_mutex_lock(&output->damage_mutex);
-    bool needs_render = pixman_region32_not_empty(&output->damage_ring.current) ||
-        instance->show_fps ||
-        instance->sparrow_renderer.current_scene.needs_update;
+    bool needs_render = false;
+    pixman_region32_t frame_damage;
+    pixman_region32_init(&frame_damage);
+
+    pixman_region32_t vis_damage;
+    pixman_region32_init(&vis_damage);
+
+    {
+        std::lock_guard<std::mutex> lock(output->damage_mutex);
+        needs_render = pixman_region32_not_empty(&output->damage_ring.current) ||
+            instance->show_fps ||
+            instance->sparrow_renderer.current_scene.needs_update;
+
+        if (needs_render)
+        {
+            pixman_region32_copy(&frame_damage, &output->damage_ring.current);
+            pixman_region32_clear(&output->damage_ring.current);
+
+            pixman_region32_copy(&vis_damage, &output->client_damage);
+            pixman_region32_clear(&output->client_damage);
+        }
+    }
 
     if (!needs_render)
     {
-        pthread_mutex_unlock(&output->damage_mutex);
+        pixman_region32_fini(&frame_damage);
+        pixman_region32_fini(&vis_damage);
         if (output == instance->vsync_output)
         {
             intptr_t baton = atomic_exchange(&instance->vsync_baton, 0);
@@ -1198,9 +1520,25 @@ static void output_frame(struct wl_listener *listener, void *data)
             }
         }
 
-        // Still send frame done to surfaces on this output waiting for frame callback so they don't stall
+        // Still send frame done to surfaces on this output waiting for frame
+        // callback so they don't stall
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
+
+        if (sparrow_is_session_locked())
+        {
+            SparrowSessionLockSurface *lock_surf =
+                sparrow_session_lock_surface_for_output(output);
+            if (lock_surf && lock_surf->wlr_lock_surface &&
+                lock_surf->wlr_lock_surface->surface &&
+                lock_surf->wlr_lock_surface->surface->mapped)
+            {
+                wlr_surface_for_each_surface(lock_surf->wlr_lock_surface->surface,
+                    send_frame_done_iterator, &now);
+            }
+
+            return;
+        }
 
         SparrowView *view = nullptr;
         wl_list_for_each(view, &instance->views_list, link)
@@ -1208,7 +1546,8 @@ static void output_frame(struct wl_listener *listener, void *data)
             if ((view->xdg_surface != nullptr) &&
                 (view->xdg_surface->surface != nullptr) &&
                 view->xdg_surface->surface->mapped &&
-                ((view->current_output == output) || (view->current_output == nullptr)) &&
+                ((view->current_output == output) ||
+                 (view->current_output == nullptr)) &&
                 sparrow_view_is_visible(view))
             {
                 wlr_surface_for_each_surface(view->xdg_surface->surface,
@@ -1224,7 +1563,8 @@ static void output_frame(struct wl_listener *listener, void *data)
                 if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                     (popup->xdg_surface->surface != nullptr) &&
                     popup->xdg_surface->surface->mapped &&
-                    (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
+                    (!popup->parent_view ||
+                     sparrow_view_is_visible(popup->parent_view)))
                 {
                     wlr_surface_for_each_surface(popup->xdg_surface->surface,
                         send_frame_done_iterator, &now);
@@ -1234,18 +1574,6 @@ static void output_frame(struct wl_listener *listener, void *data)
 
         return;
     }
-
-    // Atomically snapshot and clear current damage under lock
-    pixman_region32_t frame_damage;
-    pixman_region32_init(&frame_damage);
-    pixman_region32_copy(&frame_damage, &output->damage_ring.current);
-    pixman_region32_clear(&output->damage_ring.current);
-
-    pixman_region32_t vis_damage;
-    pixman_region32_init(&vis_damage);
-    pixman_region32_copy(&vis_damage, &output->client_damage);
-    pixman_region32_clear(&output->client_damage);
-    pthread_mutex_unlock(&output->damage_mutex);
 
 #ifdef DAMAGE_HISTORY
     pixman_region32_t render_damage;
@@ -1272,7 +1600,8 @@ static void output_frame(struct wl_listener *listener, void *data)
 #endif
     // frame_damage is finalized at the end of the frame after debug visualization
 
-    // If show_fps is active, prepare texture before begin_render_pass and un-scissor in render pass
+    // If show_fps is active, prepare texture before begin_render_pass and
+    // un-scissor in render pass
     if (instance->show_fps)
     {
         int damage_count = 0;
@@ -1281,9 +1610,98 @@ static void output_frame(struct wl_listener *listener, void *data)
             pixman_region32_rectangles(&vis_damage, &damage_count);
         }
 
-        prepare_fps_osd(output, wlr_output->width, wlr_output->height, damage_count, now_us);
-        pixman_region32_union_rect(&render_damage, &render_damage,
-            wlr_output->width - 420, 0, 420, 60);
+        prepare_fps_osd(output, wlr_output->width, wlr_output->height, damage_count,
+            now_us);
+        struct wlr_box osd_box = get_fps_osd_buffer_box(output);
+        pixman_region32_union_rect(&render_damage, &render_damage, osd_box.x,
+            osd_box.y, osd_box.width, osd_box.height);
+    }
+
+    if (sparrow_is_session_locked())
+    {
+        struct wlr_output_state output_state;
+        wlr_output_state_init(&output_state);
+        wlr_output_state_set_damage(&output_state, &render_damage);
+
+        struct wlr_render_pass *render_pass =
+            wlr_output_begin_render_pass(wlr_output, &output_state, nullptr);
+        if (render_pass != nullptr)
+        {
+            SparrowSessionLockSurface *lock_surf =
+                sparrow_session_lock_surface_for_output(output);
+
+            if (lock_surf && lock_surf->committed && lock_surf->wlr_lock_surface &&
+                lock_surf->wlr_lock_surface->surface &&
+                lock_surf->wlr_lock_surface->surface->mapped)
+            {
+                struct wlr_surface *surf = lock_surf->wlr_lock_surface->surface;
+
+                // Security baseline: always clear screen with solid black behind lock
+                // surface
+                struct wlr_render_rect_options bg_opts = {
+                    .box   = {.x = 0,
+                        .y = 0,
+                        .width  = wlr_output->width,
+                        .height = wlr_output->height},
+                    .color = {0.0f, 0.0f, 0.0f, 1.0f},
+                };
+                wlr_render_pass_add_rect(render_pass, &bg_opts);
+
+                LockSurfaceRenderData rdata = {
+                    .render_pass = render_pass,
+                    .output = output,
+                    .root_surface = surf,
+                };
+                wlr_surface_for_each_surface(surf, render_lock_surface_iterator,
+                    &rdata);
+
+                struct timespec ts_done;
+                clock_gettime(CLOCK_MONOTONIC, &ts_done);
+                wlr_surface_for_each_surface(surf, send_frame_done_iterator, &ts_done);
+                wlr_surface_for_each_surface(surf, send_presentation_iterator,
+                    wlr_output);
+            } else
+            {
+                // Blank screen securely with solid black until lock surface arrives
+                struct wlr_render_rect_options opts = {
+                    .box   = {.x = 0,
+                        .y = 0,
+                        .width  = wlr_output->width,
+                        .height = wlr_output->height},
+                    .color = {0.0f, 0.0f, 0.0f, 1.0f},
+                };
+                wlr_render_pass_add_rect(render_pass, &opts);
+            }
+
+            wlr_render_pass_submit(render_pass);
+            wlr_output_commit_state(wlr_output, &output_state);
+        }
+
+        wlr_output_state_finish(&output_state);
+        pixman_region32_fini(&render_damage);
+        pixman_region32_fini(&frame_damage);
+        pixman_region32_fini(&vis_damage);
+
+        if (output == instance->vsync_output)
+        {
+            intptr_t baton = atomic_exchange(&instance->vsync_baton, 0);
+            if (baton != 0)
+            {
+                uint64_t current_time    = instance->embedder_api.GetCurrentTime();
+                uint64_t frame_target_ns = 16600000;
+                if (wlr_output->current_mode &&
+                    (wlr_output->current_mode->refresh > 0))
+                {
+                    frame_target_ns =
+                        1000000000000ULL / wlr_output->current_mode->refresh;
+                }
+
+                instance->embedder_api.OnVsync(instance->engine, baton, current_time,
+                    current_time + frame_target_ns);
+            }
+        }
+
+        return;
     }
 
     // Direct Scanout / Direct Draw check for fullscreen applications / games
@@ -1293,11 +1711,13 @@ static void output_frame(struct wl_listener *listener, void *data)
     if (fs_view != nullptr)
     {
         target_buf     = fs_view->locked_buffer;
-        target_surface = fs_view->xdg_surface ? fs_view->xdg_surface->surface : nullptr;
+        target_surface =
+            fs_view->xdg_surface ? fs_view->xdg_surface->surface : nullptr;
         SparrowSubSurface *sub = nullptr;
         wl_list_for_each(sub, &fs_view->subsurfaces, link)
         {
-            if (sub->surface && sub->surface->mapped && (sub->locked_buffer != nullptr))
+            if (sub->surface && sub->surface->mapped &&
+                (sub->locked_buffer != nullptr))
             {
                 target_buf     = sub->locked_buffer;
                 target_surface = sub->surface;
@@ -1306,14 +1726,16 @@ static void output_frame(struct wl_listener *listener, void *data)
         }
     }
 
-    if ((fs_view != nullptr) && (target_buf != nullptr) && (target_surface != nullptr))
+    if ((fs_view != nullptr) && (target_buf != nullptr) &&
+        (target_surface != nullptr))
     {
-        double refresh_budget_ms = (wlr_output->current_mode && wlr_output->current_mode->refresh > 0) ?
+        double refresh_budget_ms =
+            (wlr_output->current_mode && wlr_output->current_mode->refresh > 0) ?
             (1000000.0 / wlr_output->current_mode->refresh) :
             16.666;
 
-        // DIRECT 1-PASS GPU DRAW / BLIT (0.1ms GPU render, zero latency, flicker-free with overview &
-        // gestures)
+        // DIRECT 1-PASS GPU DRAW / BLIT (0.1ms GPU render, zero latency,
+        // flicker-free with overview & gestures)
         struct wlr_output_state direct_blit_state;
         wlr_output_state_init(&direct_blit_state);
         wlr_output_state_set_damage(&direct_blit_state, &render_damage);
@@ -1343,7 +1765,7 @@ static void output_frame(struct wl_listener *listener, void *data)
                 if (instance->show_fps)
                 {
                     SPARROW_GL_SCOPE("Sparrow::FPS_OSD");
-                    render_fps_osd(direct_pass, output, wlr_output->width, wlr_output->height);
+                    render_fps_osd(direct_pass, output);
                 }
 
                 bool submit_ok = wlr_render_pass_submit(direct_pass);
@@ -1354,8 +1776,8 @@ static void output_frame(struct wl_listener *listener, void *data)
                     // (c-cpp-flylint)(knownConditionTrueFalse)
                     if (target_surface != nullptr)
                     {
-                        wlr_surface_for_each_surface(target_surface,
-                            send_presentation_iterator, wlr_output);
+                        wlr_surface_for_each_surface(
+                            target_surface, send_presentation_iterator, wlr_output);
                     }
 
                     wlr_output_commit_state(wlr_output, &direct_blit_state);
@@ -1369,13 +1791,17 @@ static void output_frame(struct wl_listener *listener, void *data)
                     output->flip_count++;
                     output->last_flip_time_us = now_us;
 
-                    if (instance->debug_pacing && (now_us - output->last_pacing_log_time_us >= 2000000ULL))
+                    if (instance->debug_pacing &&
+                        (now_us - output->last_pacing_log_time_us >= 2000000ULL))
                     {
                         output->last_pacing_log_time_us = now_us;
-                        const char *app = (fs_view->toplevel &&
-                            fs_view->toplevel->app_id) ? fs_view->toplevel->app_id : "app";
-                        wlr_log(WLR_INFO,
-                            "[PACING-DIRECT-BLIT] Output '%s': App '%s' Direct 1-Pass Blit Active | Flips=%lu (Direct 1-Pass=%lu, Composited=%lu)",
+                        const char *app = (fs_view->toplevel && fs_view->toplevel->app_id) ?
+                            fs_view->toplevel->app_id :
+                            "app";
+                        wlr_log(
+                            WLR_INFO,
+                            "[PACING-DIRECT-BLIT] Output '%s': App '%s' Direct 1-Pass Blit "
+                            "Active | Flips=%lu (Direct 1-Pass=%lu, Composited=%lu)",
                             wlr_output->name, app, (unsigned long)output->flip_count,
                             (unsigned long)output->direct_draw_flips,
                             (unsigned long)output->composited_flips);
@@ -1387,8 +1813,10 @@ static void output_frame(struct wl_listener *listener, void *data)
                         if (baton != 0)
                         {
                             uint64_t current_time    = instance->embedder_api.GetCurrentTime();
-                            uint64_t frame_target_ns = (uint64_t)(refresh_budget_ms * 1000000.0);
-                            instance->embedder_api.OnVsync(instance->engine, baton, current_time,
+                            uint64_t frame_target_ns =
+                                (uint64_t)(refresh_budget_ms * 1000000.0);
+                            instance->embedder_api.OnVsync(instance->engine, baton,
+                                current_time,
                                 current_time + frame_target_ns);
                         }
                     }
@@ -1438,9 +1866,11 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     // Clear to dark background only if Flutter hasn't produced scene layers yet
     bool has_scene_layers = false;
-    pthread_mutex_lock(&instance->sparrow_renderer.render_mutex);
-    has_scene_layers = (instance->sparrow_renderer.current_scene.layers_count > 0);
-    pthread_mutex_unlock(&instance->sparrow_renderer.render_mutex);
+    {
+        std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.render_mutex);
+        has_scene_layers =
+            (instance->sparrow_renderer.current_scene.layers_count > 0);
+    }
 
     if (!has_scene_layers)
     {
@@ -1476,135 +1906,146 @@ static void output_frame(struct wl_listener *listener, void *data)
         .transform     = wlr_output->transform,
     };
 
-    pthread_mutex_lock(&instance->sparrow_renderer.render_mutex);
-
-    {
-        SPARROW_GL_SCOPE("Sparrow::ScenePass");
-        // Render the Flutter scene directly (GPU textures + platform views)
-        // This is the Flutter-centric path: NO CPU READBACK
-        // Each output renders its portion of the unified coordinate space
-        sparrow_renderer_render_scene(render_pass, &viewport,
-#ifdef DAMAGE_HISTORY
-            &render_damage
-#else
-            nullptr
-#endif
-        );
-    }
-
-    // Live damage visualization: highlight client damaged rectangles with thick 4px borders
-    if (instance->debug_damage && pixman_region32_not_empty(&vis_damage))
-    {
-        SPARROW_GL_SCOPE("Sparrow::DamageDebugRainbow");
-        static size_t s_palette_index     = 0;
-        static const float s_palette[][3] = {
-            {0.00f, 0.90f, 1.00f}, // Cyan
-            {1.00f, 0.15f, 0.50f}, // Neon Rose / Pink
-            {0.15f, 1.00f, 0.30f}, // Lime Green
-            {1.00f, 0.55f, 0.00f}, // Bright Orange
-            {0.70f, 0.20f, 1.00f}, // Purple
-            {1.00f, 0.90f, 0.00f}, // Yellow
-            {0.00f, 0.55f, 1.00f}, // Azure Blue
-            {1.00f, 0.20f, 0.10f}, // Coral Red
-            {0.00f, 1.00f, 0.80f}, // Turquoise
-            {1.00f, 0.00f, 0.85f}, // Magenta
-            {0.45f, 1.00f, 0.00f}, // Chartreuse
-            {0.20f, 0.80f, 1.00f}, // Sky Blue
-        };
-        static const size_t s_num_colors = sizeof(s_palette) / sizeof(s_palette[0]);
-
-        int nrects = 0;
-        const pixman_box32_t *rects =
-            pixman_region32_rectangles(&vis_damage, &nrects);
-
-        const float *c = s_palette[s_palette_index % s_num_colors];
-        s_palette_index++;
-
-        for (int i = 0; i < nrects; i++)
-        {
-            int rx = rects[i].x1;
-            int ry = rects[i].y1;
-            int rw = rects[i].x2 - rects[i].x1;
-            int rh = rects[i].y2 - rects[i].y1;
-            if ((rw <= 0) || (rh <= 0))
-            {
-                continue;
-            }
-
-            const int bw = (rw >= 24 && rh >= 24) ? 4 : ((rw >= 12 && rh >= 12) ? 3 : 2);
-
-            struct wlr_render_rect_options top_border = {
-                .box   = {.x = rx, .y = ry, .width = rw, .height = bw},
-                .color = {c[0], c[1], c[2], 1.0f},
-            };
-            struct wlr_render_rect_options bottom_border = {
-                .box   = {.x = rx, .y = ry + rh - bw, .width = rw, .height = bw},
-                .color = {c[0], c[1], c[2], 1.0f},
-            };
-            struct wlr_render_rect_options left_border = {
-                .box   = {.x = rx, .y = ry, .width = bw, .height = rh},
-                .color = {c[0], c[1], c[2], 1.0f},
-            };
-            struct wlr_render_rect_options right_border = {
-                .box   = {.x = rx + rw - bw, .y = ry, .width = bw, .height = rh},
-                .color = {c[0], c[1], c[2], 1.0f},
-            };
-            wlr_render_pass_add_rect(render_pass, &top_border);
-            wlr_render_pass_add_rect(render_pass, &bottom_border);
-            wlr_render_pass_add_rect(render_pass, &left_border);
-            wlr_render_pass_add_rect(render_pass, &right_border);
-        }
-    }
-
-    // Render software cursor on top of everything
-    render_cursor(render_pass, &viewport);
-
-    // Render FPS & latency debug OSD if enabled
-    struct timespec t_render_now;
-    clock_gettime(CLOCK_MONOTONIC, &t_render_now);
-    double cur_render_ms = ((t_render_now.tv_sec - t_frame_start.tv_sec) * 1000.0) +
-        ((t_render_now.tv_nsec - t_frame_start.tv_nsec) / 1000000.0);
-    output->smoothed_render_ms = (output->smoothed_render_ms <= 0.0) ?
-        cur_render_ms :
-        (output->smoothed_render_ms * 0.9 + cur_render_ms * 0.1);
-
-    double refresh_budget_ms = (wlr_output->current_mode && wlr_output->current_mode->refresh > 0) ?
+    double refresh_budget_ms =
+        (wlr_output->current_mode && wlr_output->current_mode->refresh > 0) ?
         (1000000.0 / wlr_output->current_mode->refresh) :
         16.666;
 
-    // Buffering mode evaluation (Controlled by F9 / instance->buffering_mode):
-    if (instance->buffering_mode == Core::BUFFERING_DOUBLE)
+    bool submit_ok = false;
     {
-        output->triple_buffering_active = false;
-    } else if (instance->buffering_mode == Core::BUFFERING_TRIPLE)
-    {
-        output->triple_buffering_active = true;
-    } else // BUFFERING_AUTO
-    {
-        if (output->smoothed_render_ms > (0.80 * refresh_budget_ms))
+        std::lock_guard<std::recursive_mutex> lock(instance->sparrow_renderer.render_mutex);
+
         {
-            output->triple_buffering_active = true;
-        } else if (output->smoothed_render_ms < (0.50 * refresh_budget_ms))
+            SPARROW_GL_SCOPE("Sparrow::ScenePass");
+            // Render the Flutter scene directly (GPU textures + platform views)
+            // This is the Flutter-centric path: NO CPU READBACK
+            // Each output renders its portion of the unified coordinate space
+            sparrow_renderer_render_scene(render_pass, &viewport,
+#ifdef DAMAGE_HISTORY
+                &render_damage
+#else
+                nullptr
+#endif
+            );
+        }
+
+        // Live damage visualization: highlight client damaged rectangles with thick
+        // 4px borders
+        if (instance->debug_damage && pixman_region32_not_empty(&vis_damage))
+        {
+            SPARROW_GL_SCOPE("Sparrow::DamageDebugRainbow");
+            static size_t s_palette_index     = 0;
+            static const float s_palette[][3] = {
+                {0.00f, 0.90f, 1.00f}, // Cyan
+                {1.00f, 0.15f, 0.50f}, // Neon Rose / Pink
+                {0.15f, 1.00f, 0.30f}, // Lime Green
+                {1.00f, 0.55f, 0.00f}, // Bright Orange
+                {0.70f, 0.20f, 1.00f}, // Purple
+                {1.00f, 0.90f, 0.00f}, // Yellow
+                {0.00f, 0.55f, 1.00f}, // Azure Blue
+                {1.00f, 0.20f, 0.10f}, // Coral Red
+                {0.00f, 1.00f, 0.80f}, // Turquoise
+                {1.00f, 0.00f, 0.85f}, // Magenta
+                {0.45f, 1.00f, 0.00f}, // Chartreuse
+                {0.20f, 0.80f, 1.00f}, // Sky Blue
+            };
+            static const size_t s_num_colors = sizeof(s_palette) / sizeof(s_palette[0]);
+
+            int nrects = 0;
+            const pixman_box32_t *rects =
+                pixman_region32_rectangles(&vis_damage, &nrects);
+
+            const float *c = s_palette[s_palette_index % s_num_colors];
+            s_palette_index++;
+
+            for (int i = 0; i < nrects; i++)
+            {
+                int rx = rects[i].x1;
+                int ry = rects[i].y1;
+                int rw = rects[i].x2 - rects[i].x1;
+                int rh = rects[i].y2 - rects[i].y1;
+                if ((rw <= 0) || (rh <= 0))
+                {
+                    continue;
+                }
+
+                const int bw =
+                    (rw >= 24 && rh >= 24) ? 4 : ((rw >= 12 && rh >= 12) ? 3 : 2);
+
+                struct wlr_render_rect_options top_border = {
+                    .box   = {.x = rx, .y = ry, .width = rw, .height = bw},
+                    .color = {c[0], c[1], c[2], 1.0f},
+                };
+                struct wlr_render_rect_options bottom_border = {
+                    .box   = {.x = rx, .y = ry + rh - bw, .width = rw, .height = bw},
+                    .color = {c[0], c[1], c[2], 1.0f},
+                };
+                struct wlr_render_rect_options left_border = {
+                    .box   = {.x = rx, .y = ry, .width = bw, .height = rh},
+                    .color = {c[0], c[1], c[2], 1.0f},
+                };
+                struct wlr_render_rect_options right_border = {
+                    .box   = {.x = rx + rw - bw, .y = ry, .width = bw, .height = rh},
+                    .color = {c[0], c[1], c[2], 1.0f},
+                };
+                wlr_render_pass_add_rect(render_pass, &top_border);
+                wlr_render_pass_add_rect(render_pass, &bottom_border);
+                wlr_render_pass_add_rect(render_pass, &left_border);
+                wlr_render_pass_add_rect(render_pass, &right_border);
+            }
+        }
+
+        // Render software cursor on top of everything
+        render_cursor(render_pass, &viewport);
+
+        // Render FPS & latency debug OSD if enabled
+        struct timespec t_render_now;
+        clock_gettime(CLOCK_MONOTONIC, &t_render_now);
+        double cur_render_ms =
+            ((t_render_now.tv_sec - t_frame_start.tv_sec) * 1000.0) +
+            ((t_render_now.tv_nsec - t_frame_start.tv_nsec) / 1000000.0);
+        output->smoothed_render_ms =
+            (output->smoothed_render_ms <= 0.0) ?
+            cur_render_ms :
+            (output->smoothed_render_ms * 0.9 + cur_render_ms * 0.1);
+
+        refresh_budget_ms =
+            (wlr_output->current_mode && wlr_output->current_mode->refresh > 0) ?
+            (1000000.0 / wlr_output->current_mode->refresh) :
+            16.666;
+
+        // Buffering mode evaluation (Controlled by F9 / instance->buffering_mode):
+        if (instance->buffering_mode == Core::BUFFERING_DOUBLE)
         {
             output->triple_buffering_active = false;
+        } else if (instance->buffering_mode == Core::BUFFERING_TRIPLE)
+        {
+            output->triple_buffering_active = true;
+        } else // BUFFERING_AUTO
+        {
+            if (output->smoothed_render_ms > (0.80 * refresh_budget_ms))
+            {
+                output->triple_buffering_active = true;
+            } else if (output->smoothed_render_ms < (0.50 * refresh_budget_ms))
+            {
+                output->triple_buffering_active = false;
+            }
         }
+
+        // Render FPS & latency debug OSD if enabled
+        if (instance->show_fps)
+        {
+            SPARROW_GL_SCOPE("Sparrow::FPS_OSD");
+            render_fps_osd(render_pass, output);
+        }
+
+        pixman_region32_fini(&render_damage);
+        pixman_region32_fini(&frame_damage);
+        pixman_region32_fini(&vis_damage);
+
+        // Submit render pass
+        submit_ok = wlr_render_pass_submit(render_pass);
     }
-
-    // Render FPS & latency debug OSD if enabled
-    if (instance->show_fps)
-    {
-        SPARROW_GL_SCOPE("Sparrow::FPS_OSD");
-        render_fps_osd(render_pass, output, wlr_output->width, wlr_output->height);
-    }
-
-    pixman_region32_fini(&render_damage);
-    pixman_region32_fini(&frame_damage);
-    pixman_region32_fini(&vis_damage);
-
-    // Submit render pass
-    bool submit_ok = wlr_render_pass_submit(render_pass);
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.render_mutex);
 
     if (!submit_ok)
     {
@@ -1613,14 +2054,16 @@ static void output_frame(struct wl_listener *listener, void *data)
         return;
     }
 
-    // Mark visible surfaces on THIS output for presentation feedback BEFORE output commit
+    // Mark visible surfaces on THIS output for presentation feedback BEFORE
+    // output commit
     SparrowView *view = nullptr;
     wl_list_for_each(view, &instance->views_list, link)
     {
         if ((view->xdg_surface != nullptr) &&
             (view->xdg_surface->surface != nullptr) &&
             view->xdg_surface->surface->mapped &&
-            ((view->current_output == output) || (view->current_output == nullptr)) &&
+            ((view->current_output == output) ||
+             (view->current_output == nullptr)) &&
             sparrow_view_is_visible(view))
         {
             wlr_surface_for_each_surface(view->xdg_surface->surface,
@@ -1635,7 +2078,8 @@ static void output_frame(struct wl_listener *listener, void *data)
             if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                 (popup->xdg_surface->surface != nullptr) &&
                 popup->xdg_surface->surface->mapped &&
-                (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
+                (!popup->parent_view ||
+                 sparrow_view_is_visible(popup->parent_view)))
             {
                 wlr_surface_for_each_surface(popup->xdg_surface->surface,
                     send_presentation_iterator, wlr_output);
@@ -1655,7 +2099,8 @@ static void output_frame(struct wl_listener *listener, void *data)
 #endif
 
     output->flip_count++;
-    double flip_dt_ms = (output->last_flip_time_us > 0) ?
+    double flip_dt_ms =
+        (output->last_flip_time_us > 0) ?
         (double)(now_us - output->last_flip_time_us) / 1000.0 :
         0.0;
     output->last_flip_time_us = now_us;
@@ -1666,14 +2111,16 @@ static void output_frame(struct wl_listener *listener, void *data)
         if (instance->debug_pacing)
         {
             wlr_log(WLR_INFO,
-                "[PACING-VBLANK-MISS] Output '%s' frame interval spike: %.2fms (target: %.2fms, missed: %lu)",
+                "[PACING-VBLANK-MISS] Output '%s' frame interval spike: %.2fms "
+                "(target: %.2fms, missed: %lu)",
                 wlr_output->name, flip_dt_ms, refresh_budget_ms,
                 (unsigned long)output->missed_vblank_count);
         }
     }
 
     // Periodic health summary log every 2 seconds if debug_pacing is active
-    if (instance->debug_pacing && (now_us - output->last_pacing_log_time_us >= 2000000ULL))
+    if (instance->debug_pacing &&
+        (now_us - output->last_pacing_log_time_us >= 2000000ULL))
     {
         output->last_pacing_log_time_us = now_us;
         SparrowView *active_view = nullptr;
@@ -1681,12 +2128,15 @@ static void output_frame(struct wl_listener *listener, void *data)
         {
             if (active_view->commit_count > 0)
             {
-                const char *app = (active_view->toplevel &&
-                    active_view->toplevel->app_id) ? active_view->toplevel->app_id : "app";
+                const char *app =
+                    (active_view->toplevel && active_view->toplevel->app_id) ?
+                    active_view->toplevel->app_id :
+                    "app";
                 wlr_log(WLR_INFO,
-                    "[PACING-SUMMARY] App '%s': Commits=%lu | Sampled=%lu | DroppedOverwritten=%lu | GhostDupes=%lu || KMS: Flips=%lu | VBlankMisses=%lu",
-                    app,
-                    (unsigned long)active_view->commit_count,
+                    "[PACING-SUMMARY] App '%s': Commits=%lu | Sampled=%lu | "
+                    "DroppedOverwritten=%lu | GhostDupes=%lu || KMS: Flips=%lu | "
+                    "VBlankMisses=%lu",
+                    app, (unsigned long)active_view->commit_count,
                     (unsigned long)active_view->sampled_count,
                     (unsigned long)active_view->dropped_buffer_count,
                     (unsigned long)active_view->duplicate_sample_count,
@@ -1696,8 +2146,9 @@ static void output_frame(struct wl_listener *listener, void *data)
         }
     }
 
-    // Dispatch VSync baton for the designated vsync output immediately after KMS commit
-    // so Flutter has the full upcoming refresh cycle budget to render the next frame on time.
+    // Dispatch VSync baton for the designated vsync output immediately after KMS
+    // commit so Flutter has the full upcoming refresh cycle budget to render the
+    // next frame on time.
     output->vsync_dispatched_in_frame = false;
     if (output == instance->vsync_output)
     {
@@ -1712,7 +2163,8 @@ static void output_frame(struct wl_listener *listener, void *data)
         }
     }
 
-    // Send frame done to Wayland surfaces that requested a frame callback on this output
+    // Send frame done to Wayland surfaces that requested a frame callback on this
+    // output
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
@@ -1721,7 +2173,8 @@ static void output_frame(struct wl_listener *listener, void *data)
         if ((view->xdg_surface != nullptr) &&
             (view->xdg_surface->surface != nullptr) &&
             view->xdg_surface->surface->mapped &&
-            ((view->current_output == output) || (view->current_output == nullptr)) &&
+            ((view->current_output == output) ||
+             (view->current_output == nullptr)) &&
             sparrow_view_is_visible(view))
         {
             wlr_surface_for_each_surface(view->xdg_surface->surface,
@@ -1738,7 +2191,8 @@ static void output_frame(struct wl_listener *listener, void *data)
             if ((popup != nullptr) && (popup->xdg_surface != nullptr) &&
                 (popup->xdg_surface->surface != nullptr) &&
                 popup->xdg_surface->surface->mapped &&
-                (!popup->parent_view || sparrow_view_is_visible(popup->parent_view)))
+                (!popup->parent_view ||
+                 sparrow_view_is_visible(popup->parent_view)))
             {
                 wlr_surface_for_each_surface(popup->xdg_surface->surface,
                     send_frame_done_iterator, &now);
@@ -1775,9 +2229,11 @@ static void output_request_state(struct wl_listener *listener, void *data)
             {
                 double clamped_x = std::clamp(instance->cursor->x, 0.0,
                     static_cast<double>(total_box.width - 1));
-                double clamped_y = std::clamp(instance->cursor->y, 0.0,
-                    static_cast<double>(total_box.height - 1));
-                if ((clamped_x != instance->cursor->x) || (clamped_y != instance->cursor->y))
+                double clamped_y =
+                    std::clamp(instance->cursor->y, 0.0,
+                        static_cast<double>(total_box.height - 1));
+                if ((clamped_x != instance->cursor->x) ||
+                    (clamped_y != instance->cursor->y))
                 {
                     wlr_cursor_warp(instance->cursor, nullptr, clamped_x, clamped_y);
                 }
@@ -1803,8 +2259,7 @@ static void output_request_state(struct wl_listener *listener, void *data)
             SparrowView *view;
             wl_list_for_each(view, &instance->views_list, link)
             {
-                if ((view->xdg_surface != nullptr) &&
-                    view->xdg_surface->initialized &&
+                if ((view->xdg_surface != nullptr) && view->xdg_surface->initialized &&
                     (view->xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) &&
                     (view->toplevel != nullptr) && view->maximized)
                 {
@@ -1814,9 +2269,35 @@ static void output_request_state(struct wl_listener *listener, void *data)
                     {
                         int eff_w = 0, eff_h = 0;
                         wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
-                        wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                        const bool is_wleird = (!view->toplevel->app_id || view->toplevel->app_id[0] == '\0');
+                        if (is_wleird && (eff_h > eff_w))
+                        {
+                            eff_h -= 1;
+                        }
+
+                        if ((view->pending_width != eff_w) || (view->pending_height != eff_h))
+                        {
+                            view->pending_width  = eff_w;
+                            view->pending_height = eff_h;
+                            wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                        }
                     }
                 }
+
+                if (view->xdg_surface && view->xdg_surface->surface &&
+                    view->xdg_surface->surface->mapped)
+                {
+                    view->last_buffer_width  = 0;
+                    view->last_buffer_height = 0;
+                    sparrow_view_damage_whole(view);
+                }
+            }
+
+            sparrow_popups_update_on_output_change(output);
+
+            if (sparrow_is_session_locked())
+            {
+                sparrow_session_lock_configure_output(output);
             }
         }
     }
@@ -1837,7 +2318,8 @@ static void output_present(struct wl_listener *listener, void *data)
 
     if (output->vsync_dispatched_in_frame)
     {
-        // VSync was already dispatched in output_frame for this flip cycle (triple buffering)
+        // VSync was already dispatched in output_frame for this flip cycle (triple
+        // buffering)
         output->vsync_dispatched_in_frame = false;
         return;
     }
@@ -1909,8 +2391,7 @@ static void output_destroy(struct wl_listener *listener, void *data)
     const bool was_vsync_output = (output == instance->vsync_output);
 
     wlr_log(WLR_INFO, "Output %s (id=%d) disconnected",
-        output->wlr_output ? output->wlr_output->name : "unknow",
-        output_id);
+        output->wlr_output ? output->wlr_output->name : "unknow", output_id);
 
     // Remove from output layout FIRST so it doesn't query a destroyed output
     if ((instance->output_layout != nullptr) && (output->wlr_output != nullptr))
@@ -1919,25 +2400,29 @@ static void output_destroy(struct wl_listener *listener, void *data)
     }
 
     // Remove listeners safely
-    if ((output->frame.link.prev != nullptr) && (output->frame.link.next != nullptr))
+    if ((output->frame.link.prev != nullptr) &&
+        (output->frame.link.next != nullptr))
     {
         wl_list_remove(&output->frame.link);
         wl_list_init(&output->frame.link);
     }
 
-    if ((output->request_state.link.prev != nullptr) && (output->request_state.link.next != nullptr))
+    if ((output->request_state.link.prev != nullptr) &&
+        (output->request_state.link.next != nullptr))
     {
         wl_list_remove(&output->request_state.link);
         wl_list_init(&output->request_state.link);
     }
 
-    if ((output->present.link.prev != nullptr) && (output->present.link.next != nullptr))
+    if ((output->present.link.prev != nullptr) &&
+        (output->present.link.next != nullptr))
     {
         wl_list_remove(&output->present.link);
         wl_list_init(&output->present.link);
     }
 
-    if ((output->destroy.link.prev != nullptr) && (output->destroy.link.next != nullptr))
+    if ((output->destroy.link.prev != nullptr) &&
+        (output->destroy.link.next != nullptr))
     {
         wl_list_remove(&output->destroy.link);
         wl_list_init(&output->destroy.link);
@@ -1974,7 +2459,6 @@ static void output_destroy(struct wl_listener *listener, void *data)
 
     wlr_damage_ring_finish(&output->damage_ring);
     pixman_region32_fini(&output->client_damage);
-    pthread_mutex_destroy(&output->damage_mutex);
 #ifdef DAMAGE_HISTORY
     for (int i = 0; i < NUM_DAMAGE_HISTORY; i++)
     {
@@ -2011,6 +2495,7 @@ static void output_destroy(struct wl_listener *listener, void *data)
 
         send_output_removed(output_id);
         sparrow_output_manager_update();
+        sparrow_output_update_dpms_lifecycle();
     }
 }
 
@@ -2035,7 +2520,6 @@ void sparrow_server_new_output(struct wl_listener *listener, void *data)
 
     output->id = ++instance->next_output_id; // Assign unique ID
     output->wlr_output = wlr_output;
-    pthread_mutex_init(&output->damage_mutex, nullptr);
     wlr_damage_ring_init(&output->damage_ring);
     pixman_region32_init(&output->client_damage);
 #ifdef DAMAGE_HISTORY
@@ -2047,7 +2531,8 @@ void sparrow_server_new_output(struct wl_listener *listener, void *data)
     sparrow_output_damage_history_reset(output, wlr_output->width,
         wlr_output->height);
     wlr_log(WLR_INFO,
-        "[TRIPLE_BUFFERING] Output %s: Triple Buffering active (swapchain capacity=%d, damage history ring=%d)",
+        "[TRIPLE_BUFFERING] Output %s: Triple Buffering active (swapchain "
+        "capacity=%d, damage history ring=%d)",
         wlr_output->name, WLR_SWAPCHAIN_CAP, NUM_DAMAGE_HISTORY);
 #endif
     // output->scene_output = wlr_scene_output_create(instance->scene,
@@ -2096,7 +2581,8 @@ void sparrow_server_new_output(struct wl_listener *listener, void *data)
             wlr_output_state_set_adaptive_sync_enabled(&state, false);
         } else
         {
-            wlr_log(WLR_INFO, "Output %s: Adaptive Sync (VRR) enabled", wlr_output->name);
+            wlr_log(WLR_INFO, "Output %s: Adaptive Sync (VRR) enabled",
+                wlr_output->name);
         }
     }
 
@@ -2155,6 +2641,7 @@ void sparrow_server_new_output(struct wl_listener *listener, void *data)
     // Send platform channel message for output_added
     send_output_added(output);
     sparrow_output_manager_update();
+    sparrow_output_update_dpms_lifecycle();
 }
 
 // Helper to get first output from list (for backwards compatibility)
@@ -2342,9 +2829,11 @@ static void handle_output_manager_apply(struct wl_listener *listener,
             {
                 double clamped_x = std::clamp(instance->cursor->x, 0.0,
                     static_cast<double>(total_box.width - 1));
-                double clamped_y = std::clamp(instance->cursor->y, 0.0,
-                    static_cast<double>(total_box.height - 1));
-                if ((clamped_x != instance->cursor->x) || (clamped_y != instance->cursor->y))
+                double clamped_y =
+                    std::clamp(instance->cursor->y, 0.0,
+                        static_cast<double>(total_box.height - 1));
+                if ((clamped_x != instance->cursor->x) ||
+                    (clamped_y != instance->cursor->y))
                 {
                     wlr_cursor_warp(instance->cursor, nullptr, clamped_x, clamped_y);
                 }
@@ -2367,7 +2856,19 @@ static void handle_output_manager_apply(struct wl_listener *listener,
                 wl_list_for_each(output, &instance->outputs, link)
                 {
                     send_output_changed(output);
+                    if (output->wlr_output && output->wlr_output->enabled)
+                    {
+#ifdef DAMAGE_HISTORY
+                        sparrow_output_damage_history_reset(output,
+                            output->wlr_output->width, output->wlr_output->height);
+#endif
+                        {
+                            std::lock_guard<std::mutex> lock(output->damage_mutex);
+                            wlr_damage_ring_add_whole(&output->damage_ring);
+                        }
+                    }
                 }
+                sparrow_damage_add_box(nullptr);
 
                 SparrowView *view;
                 wl_list_for_each(view, &instance->views_list, link)
@@ -2383,13 +2884,45 @@ static void handle_output_manager_apply(struct wl_listener *listener,
                         {
                             int eff_w = 0, eff_h = 0;
                             wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
-                            wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                            const bool is_wleird = (!view->toplevel->app_id ||
+                                view->toplevel->app_id[0] == '\0');
+                            if (is_wleird && (eff_h > eff_w))
+                            {
+                                eff_h -= 1;
+                            }
+
+                            if ((view->pending_width != eff_w) || (view->pending_height != eff_h))
+                            {
+                                view->pending_width  = eff_w;
+                                view->pending_height = eff_h;
+                                wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
+                            }
                         }
                     }
+
+                    if (view->xdg_surface && view->xdg_surface->surface &&
+                        view->xdg_surface->surface->mapped)
+                    {
+                        view->last_buffer_width  = 0;
+                        view->last_buffer_height = 0;
+                        sparrow_view_damage_whole(view);
+                    }
+                }
+
+                wl_list_for_each(output, &instance->outputs, link)
+                {
+                    sparrow_popups_update_on_output_change(output);
+                }
+
+                if (sparrow_is_session_locked())
+                {
+                    sparrow_session_lock_configure_all();
                 }
             }
         }
     }
+
+    sparrow_output_update_dpms_lifecycle();
 }
 
 static void handle_output_manager_test(struct wl_listener *listener,
@@ -2463,7 +2996,8 @@ void sparrow_output_manager_init()
     wlr_log(WLR_INFO, "Initialized wlr_output_manager_v1");
 }
 
-static void handle_output_power_manager_set_mode(struct wl_listener *listener, void *data)
+static void handle_output_power_manager_set_mode(struct wl_listener *listener,
+    void *data)
 {
     (void)listener;
     struct wlr_output_power_v1_set_mode_event *event =
@@ -2481,7 +3015,8 @@ static void handle_output_power_manager_set_mode(struct wl_listener *listener, v
     {
       case ZWLR_OUTPUT_POWER_V1_MODE_OFF:
         wlr_output_state_set_enabled(&state, false);
-        wlr_log(WLR_INFO, "[DPMS] Output '%s' power mode: OFF", event->output->name);
+        wlr_log(WLR_INFO, "[DPMS] Output '%s' power mode: OFF",
+            event->output->name);
         break;
 
       case ZWLR_OUTPUT_POWER_V1_MODE_ON:
@@ -2492,7 +3027,8 @@ static void handle_output_power_manager_set_mode(struct wl_listener *listener, v
 
     if (!wlr_output_commit_state(event->output, &state))
     {
-        wlr_log(WLR_ERROR, "[DPMS] Failed to commit power state for output '%s'", event->output->name);
+        wlr_log(WLR_ERROR, "[DPMS] Failed to commit power state for output '%s'",
+            event->output->name);
     } else
     {
         if (event->mode == ZWLR_OUTPUT_POWER_V1_MODE_ON)
@@ -2501,6 +3037,8 @@ static void handle_output_power_manager_set_mode(struct wl_listener *listener, v
             sparrow_damage_add_box(nullptr);
             wlr_output_schedule_frame(event->output);
         }
+
+        sparrow_output_update_dpms_lifecycle();
     }
 
     wlr_output_state_finish(&state);
@@ -2510,16 +3048,45 @@ void sparrow_output_power_manager_init()
 {
     Core *instance = Core::instance();
 
-    instance->output_power_manager = wlr_output_power_manager_v1_create(instance->wl_display);
+    instance->output_power_manager =
+        wlr_output_power_manager_v1_create(instance->wl_display);
     if (instance->output_power_manager == nullptr)
     {
         wlr_log(WLR_ERROR, "Failed to create wlr_output_power_manager_v1");
         return;
     }
 
-    instance->output_power_manager_set_mode.notify = handle_output_power_manager_set_mode;
+    instance->output_power_manager_set_mode.notify =
+        handle_output_power_manager_set_mode;
     wl_signal_add(&instance->output_power_manager->events.set_mode,
         &instance->output_power_manager_set_mode);
 
-    wlr_log(WLR_INFO, "Initialized wlr_output_power_management_v1 (DPMS power control)");
+    wlr_log(WLR_INFO,
+        "Initialized wlr_output_power_management_v1 (DPMS power control)");
+}
+
+bool sparrow_has_enabled_output()
+{
+    Core *instance = Core::instance();
+    if ((instance == nullptr) || wl_list_empty(&instance->outputs))
+    {
+        return false;
+    }
+
+    Output *output = nullptr;
+    wl_list_for_each(output, &instance->outputs, link)
+    {
+        if ((output->wlr_output != nullptr) && output->wlr_output->enabled)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void sparrow_output_update_dpms_lifecycle()
+{
+    const bool enabled = sparrow_has_enabled_output();
+    sparrow_send_lifecycle_state_dpms(enabled);
 }

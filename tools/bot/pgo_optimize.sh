@@ -46,18 +46,31 @@ else
 fi
 echo -e "${GREEN}[OK] Instrumented binary ready.${NC}\n"
 
-# Step 2: Run training workload with Bot
-echo -e "${YELLOW}${BOLD}[STEP 2/3] Generating profile dataset via automated UI bot...${NC}"
-./tools/bot/sparrow_bot.sh --pgo $HEADLESS_FLAG
-echo -e "${GREEN}[OK] Profile data collected in sparrow.profraw.${NC}\n"
+# Step 2: Run training workloads
+echo -e "${YELLOW}${BOLD}[STEP 2/3] Generating profile dataset via PageView/Overview & automated UI bot...${NC}"
+PGO_PROFILE_DIR="${ROOT_DIR}/out/pgo_profiles"
+rm -rf "$PGO_PROFILE_DIR"
+mkdir -p "$PGO_PROFILE_DIR"
 
-# Step 2.5: Merge raw profile into sparrow.profdata
-echo -e "${YELLOW}${BOLD}[STEP 2.5] Converting raw profile to sparrow.profdata...${NC}"
-if [ -f "${ROOT_DIR}/sparrow.profraw" ]; then
+export LLVM_PROFILE_FILE="${PGO_PROFILE_DIR}/sparrow-%p.profraw"
+
+echo -e "${CYAN}  -> [1/2] Running PageView & Overview multi-window workload...${NC}"
+./tools/bot/pageview_overview_test.sh $HEADLESS_FLAG
+
+echo -e "${CYAN}  -> [2/2] Running declarative application workload bot...${NC}"
+./tools/bot/sparrow_bot.sh --pgo $HEADLESS_FLAG
+echo -e "${GREEN}[OK] Profile datasets collected in ${PGO_PROFILE_DIR}.${NC}\n"
+
+# Step 2.5: Merge raw profiles into sparrow.profdata
+echo -e "${YELLOW}${BOLD}[STEP 2.5] Converting raw profiles to sparrow.profdata...${NC}"
+if compgen -G "${PGO_PROFILE_DIR}/*.profraw" > /dev/null; then
+    llvm-profdata merge -output="${ROOT_DIR}/sparrow.profdata" "${PGO_PROFILE_DIR}"/*.profraw
+    echo -e "${GREEN}[OK] Generated sparrow.profdata ($(du -h "${ROOT_DIR}/sparrow.profdata" | cut -f1)).${NC}\n"
+elif [ -f "${ROOT_DIR}/sparrow.profraw" ]; then
     llvm-profdata merge -output="${ROOT_DIR}/sparrow.profdata" "${ROOT_DIR}/sparrow.profraw"
     echo -e "${GREEN}[OK] Generated sparrow.profdata ($(du -h "${ROOT_DIR}/sparrow.profdata" | cut -f1)).${NC}\n"
 else
-    echo -e "${RED}[ERROR] sparrow.profraw not found!${NC}"
+    echo -e "${RED}[ERROR] No raw profile found in ${PGO_PROFILE_DIR} or ${ROOT_DIR}/sparrow.profraw!${NC}"
     exit 1
 fi
 

@@ -5,7 +5,8 @@ set(PIGEON_RUNNER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../platform/pigeon/r
 set(PLATFORM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../platform/include")
 set(SPARROW_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../proto")
 set(SPARROW_RUNNER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/runner")
-set(RAPIDJSON_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../platform/rapidjson/include")
+set(SIMDJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../subprojects/simdjson")
+set(SIMDJSON_INCLUDE_DIR "${SIMDJSON_DIR}/include")
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
@@ -39,6 +40,7 @@ add_executable(${BINARY_NAME}
   "${PIGEON_RUNNER_DIR}/messages.g.cc"
   "my_application.cc"
   "${SPARROW_RUNNER_DIR}/ipc_client.cpp"
+  "${SIMDJSON_DIR}/singleheader/simdjson.cpp"
   "${GEN_CLIENT_CODE}"
   "${GEN_CLIENT_HEADER}"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -47,6 +49,7 @@ add_executable(${BINARY_NAME}
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
+target_compile_features(${BINARY_NAME} PRIVATE cxx_std_17)
 
 # Add preprocessor definitions for the application ID.
 add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
@@ -61,4 +64,4 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_include_directories(${BINARY_NAME} PRIVATE "${PIGEON_RUNNER_DIR}")
 target_include_directories(${BINARY_NAME} PRIVATE "${PLATFORM_INCLUDE_DIR}")
 target_include_directories(${BINARY_NAME} PRIVATE "${SPARROW_RUNNER_DIR}")
-target_include_directories(${BINARY_NAME} PRIVATE "${RAPIDJSON_INCLUDE_DIR}")
+target_include_directories(${BINARY_NAME} PRIVATE "${SIMDJSON_INCLUDE_DIR}")

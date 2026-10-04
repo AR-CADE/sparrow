@@ -95,6 +95,11 @@ class SparrowView
     int pending_width  = 0;          // Requested content width
     int pending_height = 0; // Requested content height
     uint64_t resize_request_id = 0; // Dart's request ID for correlation
+
+    // Buffer and scene dimensions tracking for damage invalidation on resize/rotation
+    int last_buffer_width  = 0;
+    int last_buffer_height = 0;
+    struct wlr_box last_scene_box = {};
 };
 
 void sparrow_view_damage_whole(SparrowView *view);

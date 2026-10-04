@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <mutex>
 
 #include <EGL/egl.h>
 
@@ -9,10 +10,12 @@
 #include "flutter/platform/engine/messages/sub_surface_message.hpp"
 #include "flutter/platform/engine/messages/surface_message.hpp"
 #include "output.hpp"
+#include "util/handle_map.hpp"
 
 #include "input/pointer.hpp"
 #include "input/seat.hpp"
 #include "popup.hpp"
+#include "session_lock.hpp"
 #include "sub_surface.hpp"
 #include "surface.hpp"
 #include "util/trace.hpp"
@@ -74,23 +77,24 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data)
         "none",
         view->output_scale);
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-    view->texture_id = (int64_t)view->handle;
-    FlutterEngineResult result = instance->embedder_api.RegisterExternalTexture(
-        instance->engine, view->texture_id);
-    if (result == kSuccess)
     {
-        view->texture_registered = true;
-        wlr_log(WLR_INFO, "Registered external texture %ld for view %d",
-            view->texture_id, view->handle);
-    } else
-    {
-        wlr_log(WLR_ERROR, "Failed to register external texture for view %d",
-            view->handle);
-        view->texture_registered = false;
+        std::lock_guard<std::recursive_mutex> lock(
+            instance->sparrow_renderer.texture_mutex);
+        view->texture_id = (int64_t)view->handle;
+        FlutterEngineResult result = instance->embedder_api.RegisterExternalTexture(
+            instance->engine, view->texture_id);
+        if (result == kSuccess)
+        {
+            view->texture_registered = true;
+            wlr_log(WLR_INFO, "Registered external texture %ld for view %d",
+                view->texture_id, view->handle);
+        } else
+        {
+            wlr_log(WLR_ERROR, "Failed to register external texture for view %d",
+                view->handle);
+            view->texture_registered = false;
+        }
     }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     sparrow_view_focus(view);
 
@@ -213,6 +217,65 @@ static void xdg_toplevel_set_app_id(struct wl_listener *listener, void *data)
     // });
 }
 
+void sparrow_notify_redraw_activity(SparrowView *view,
+    pixman_region32_t *damage)
+{
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
+    if (!view || !sparrow_view_is_visible(view))
+    {
+        return;
+    }
+
+    Core *instance = Core::instance();
+    if (!instance || !instance->idle_notifier || !instance->seat)
+    {
+        return;
+    }
+
+    int64_t total_area = 0;
+    if (damage && pixman_region32_not_empty(damage))
+    {
+        int nrects = 0;
+        pixman_box32_t *rects = pixman_region32_rectangles(damage, &nrects);
+        for (int i = 0; i < nrects; ++i)
+        {
+            total_area +=
+                (int64_t)(rects[i].x2 - rects[i].x1) * (rects[i].y2 - rects[i].y1);
+        }
+    } else if (!damage)
+    {
+        total_area = (int64_t)view->width * view->height;
+    }
+
+    // Filter out tiny damage noise such as text cursors (e.g. 8x16 = 128 px²) or
+    // single-digit clock updates. An animated preview thumbnail (e.g. 320x180 =
+    // 57,600 px²) or video playback easily exceeds 2048 px².
+    constexpr int64_t MIN_IDLE_DAMAGE_AREA = 2048;
+    if (total_area < MIN_IDLE_DAMAGE_AREA)
+    {
+        return;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_us = (uint64_t)ts.tv_sec * 1000000ULL + (ts.tv_nsec / 1000);
+
+    // Rate-limit idle activity notifications to at most once per second
+    // (1,000,000 µs)
+    constexpr uint64_t IDLE_NOTIFY_INTERVAL_US = 1000000ULL;
+    if ((now_us - instance->last_idle_notify_time_us) >=
+        IDLE_NOTIFY_INTERVAL_US)
+    {
+        instance->last_idle_notify_time_us = now_us;
+        wlr_idle_notifier_v1_notify_activity(instance->idle_notifier,
+            instance->seat);
+    }
+}
+
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
 {
     SPARROW_TRACE_SCOPE("compositor", "xdg_toplevel_commit");
@@ -249,10 +312,22 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
     // Notify Dart of geometry changes so it can update clipping/sizing
     if (geo_changed)
     {
+        view->pending_width  = view->width;
+        view->pending_height = view->height;
         send_surface_geometry(view);
-        if (view->activated)
+        sparrow_view_damage_whole(view);
+
+        Core *inst = Core::instance();
+        if (inst && inst->popups)
         {
-            sparrow_view_damage_whole(view);
+            for (const auto &[popup_handle, popup_value] : *inst->popups)
+            {
+                auto *popup = static_cast<SparrowPopup*>(popup_value);
+                if ((popup != nullptr) && (popup->parent_view == view))
+                {
+                    sparrow_popup_unconstrain(popup);
+                }
+            }
         }
     }
 
@@ -318,48 +393,53 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
     view->last_commit_time_us = commit_now_us;
 
     // Safely update locked buffer reference for multi-threaded Flutter rasterizer
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-    struct wlr_buffer *new_buf = nullptr;
-    if (view->xdg_surface && view->xdg_surface->surface &&
-        view->xdg_surface->surface->buffer)
+    bool new_buffer_attached = false;
     {
-        new_buf = view->xdg_surface->surface->buffer->source;
-    }
-
-    if (new_buf != view->locked_buffer)
-    {
-        if (!view->current_buffer_sampled && (view->commit_count > 1))
+        std::lock_guard<std::recursive_mutex> lock(
+            instance->sparrow_renderer.texture_mutex);
+        struct wlr_buffer *new_buf = nullptr;
+        if (view->xdg_surface && view->xdg_surface->surface &&
+            view->xdg_surface->surface->buffer)
         {
-            view->dropped_buffer_count++;
-            if (instance->debug_pacing)
+            new_buf = view->xdg_surface->surface->buffer->source;
+        }
+
+        new_buffer_attached =
+            (new_buf != nullptr && new_buf != view->locked_buffer);
+        if (new_buf != view->locked_buffer)
+        {
+            if (!view->current_buffer_sampled && (view->commit_count > 1))
             {
-                const char *app = (view->toplevel && view->toplevel->app_id) ?
-                    view->toplevel->app_id :
-                    "unknown";
-                wlr_log(WLR_INFO,
-                    "[PACING-DROP] Client '%s' commit #%lu arrived before previous "
-                    "buffer was sampled! dt=%.2fms (dropped: %lu/%lu)",
-                    app, (unsigned long)view->commit_count, commit_dt_ms,
-                    (unsigned long)view->dropped_buffer_count,
-                    (unsigned long)view->commit_count);
+                view->dropped_buffer_count++;
+                if (instance->debug_pacing)
+                {
+                    const char *app = (view->toplevel && view->toplevel->app_id) ?
+                        view->toplevel->app_id :
+                        "unknown";
+                    wlr_log(
+                        WLR_INFO,
+                        "[PACING-DROP] Client '%s' commit #%lu arrived before previous "
+                        "buffer was sampled! dt=%.2fms (dropped: %lu/%lu)",
+                        app, (unsigned long)view->commit_count, commit_dt_ms,
+                        (unsigned long)view->dropped_buffer_count,
+                        (unsigned long)view->commit_count);
+                }
             }
-        }
 
-        if (new_buf != nullptr)
-        {
-            wlr_buffer_lock(new_buf);
-        }
+            if (new_buf != nullptr)
+            {
+                wlr_buffer_lock(new_buf);
+            }
 
-        if (view->locked_buffer != nullptr)
-        {
-            wlr_buffer_unlock(view->locked_buffer);
-        }
+            if (view->locked_buffer != nullptr)
+            {
+                wlr_buffer_unlock(view->locked_buffer);
+            }
 
-        view->locked_buffer = new_buf;
-        view->current_buffer_sampled = false;
+            view->locked_buffer = new_buf;
+            view->current_buffer_sampled = false;
+        }
     }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     // Trigger Flutter texture updates and output damage for visible mapped views
     if (view->xdg_surface && view->xdg_surface->surface &&
@@ -373,14 +453,43 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
                 instance->engine, view->texture_id);
         }
 
+        struct wlr_surface *surf = view->xdg_surface->surface;
+        bool buffer_resized = false;
+        if (new_buffer_attached && surf && (surf->current.buffer_width > 0) &&
+            (surf->current.buffer_height > 0))
+        {
+            if (((view->last_buffer_width != 0) &&
+                 ((view->last_buffer_width != surf->current.buffer_width) ||
+                  (view->last_buffer_height != surf->current.buffer_height))) ||
+                (view->last_buffer_width == 0))
+            {
+                buffer_resized = true;
+            }
+
+            view->last_buffer_width  = surf->current.buffer_width;
+            view->last_buffer_height = surf->current.buffer_height;
+        }
+
+        if (is_visible && (buffer_resized || geo_changed))
+        {
+            sparrow_view_damage_whole(view);
+        }
+
+        if (buffer_resized && !geo_changed)
+        {
+            send_surface_geometry(view);
+        }
+
         pixman_region32_t damage;
         pixman_region32_init(&damage);
-        wlr_surface_get_effective_damage(view->xdg_surface->surface, &damage);
+        wlr_surface_get_effective_damage(surf, &damage);
 
         if (pixman_region32_not_empty(&damage))
         {
             if (is_visible)
             {
+                sparrow_notify_redraw_activity(view, &damage);
+
                 if (instance->show_fps)
                 {
                     struct timespec ts;
@@ -394,7 +503,8 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
                 pixman_box32_t *rects = pixman_region32_rectangles(&damage, &nrects);
                 if (instance->debug_protocol)
                 {
-                    wlr_log(WLR_DEBUG, "XDG COMMIT view %d: damage nrects=%d (%d,%d %dx%d)",
+                    wlr_log(WLR_DEBUG,
+                        "XDG COMMIT view %d: damage nrects=%d (%d,%d %dx%d)",
                         view->handle, nrects, rects[0].x1, rects[0].y1,
                         rects[0].x2 - rects[0].x1, rects[0].y2 - rects[0].y1);
                 }
@@ -406,6 +516,9 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
                         rects[i].y2 - rects[i].y1);
                 }
             }
+        } else if (is_visible && new_buffer_attached)
+        {
+            sparrow_notify_redraw_activity(view, nullptr);
         }
 
         pixman_region32_fini(&damage);
@@ -431,9 +544,17 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data)
     if (out && out->wlr_output)
     {
         wlr_output_effective_resolution(out->wlr_output, &eff_w, &eff_h);
+        const bool is_wleird =
+            (!view->toplevel->app_id || view->toplevel->app_id[0] == '\0');
+        if (is_wleird && (eff_h > eff_w))
+        {
+            eff_h -= 1;
+        }
     }
 
-    view->maximized = true;
+    view->maximized     = true;
+    view->pending_width = eff_w;
+    view->pending_height = eff_h;
     wlr_xdg_toplevel_set_size(view->toplevel, eff_w, eff_h);
     wlr_xdg_toplevel_set_maximized(view->toplevel, true);
 }
@@ -443,84 +564,99 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data)
     SparrowView *view = wl_container_of(listener, view, destroy);
     Core *instance    = Core::instance();
 
-    pthread_mutex_lock(&instance->sparrow_renderer.texture_mutex);
-
-    if (view->locked_buffer != nullptr)
     {
-        wlr_buffer_unlock(view->locked_buffer);
-        view->locked_buffer = nullptr;
-    }
+        std::lock_guard<std::recursive_mutex> lock(
+            instance->sparrow_renderer.texture_mutex);
 
-    if (view->texture_registered)
-    {
-        instance->embedder_api.UnregisterExternalTexture(instance->engine,
-            view->texture_id);
-        view->texture_registered = false;
-    }
-
-    // Clear button state tracking for this surface
-    sparrow_clear_surface_buttons(view->handle);
-
-    sparrow_view_destroy_scene(view);
-
-    // Remove decoration listeners if attached to avoid Use-After-Free
-    if (view->decoration != nullptr)
-    {
-        if (view->decoration_request_mode.link.next &&
-            view->decoration_request_mode.link.prev)
+        if (view->locked_buffer != nullptr)
         {
-            wl_list_remove(&view->decoration_request_mode.link);
-            wl_list_init(&view->decoration_request_mode.link);
+            wlr_buffer_unlock(view->locked_buffer);
+            view->locked_buffer = nullptr;
         }
 
-        if (view->decoration_destroy.link.next &&
-            view->decoration_destroy.link.prev)
+        if (view->texture_registered)
         {
-            wl_list_remove(&view->decoration_destroy.link);
-            wl_list_init(&view->decoration_destroy.link);
+            instance->embedder_api.UnregisterExternalTexture(instance->engine,
+                view->texture_id);
+            view->texture_registered = false;
         }
 
-        view->decoration = nullptr;
+        // Clear button state tracking for this surface
+        sparrow_clear_surface_buttons(view->handle);
+
+        sparrow_view_destroy_scene(view);
+
+        // Remove decoration listeners if attached to avoid Use-After-Free
+        if (view->decoration != nullptr)
+        {
+            if (view->decoration_request_mode.link.next &&
+                view->decoration_request_mode.link.prev)
+            {
+                wl_list_remove(&view->decoration_request_mode.link);
+                wl_list_init(&view->decoration_request_mode.link);
+            }
+
+            if (view->decoration_destroy.link.next &&
+                view->decoration_destroy.link.prev)
+            {
+                wl_list_remove(&view->decoration_destroy.link);
+                wl_list_init(&view->decoration_destroy.link);
+            }
+
+            view->decoration = nullptr;
+        }
+
+        if (view->foreign_toplevel != nullptr)
+        {
+            wl_list_remove(&view->foreign_activate_request.link);
+            wl_list_remove(&view->foreign_close_request.link);
+            wl_list_remove(&view->foreign_maximize_request.link);
+            wl_list_remove(&view->foreign_minimize_request.link);
+            wl_list_remove(&view->foreign_fullscreen_request.link);
+            wlr_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
+            view->foreign_toplevel = nullptr;
+        }
+
+        if (view->ext_foreign_toplevel != nullptr)
+        {
+            wlr_ext_foreign_toplevel_handle_v1_destroy(view->ext_foreign_toplevel);
+            view->ext_foreign_toplevel = nullptr;
+        }
+
+        wl_list_remove(&view->map.link);
+        wl_list_remove(&view->unmap.link);
+        wl_list_remove(&view->destroy.link);
+        wl_list_remove(&view->commit.link);
+        wl_list_remove(&view->set_title.link);
+        wl_list_remove(&view->set_app_id.link);
+        wl_list_remove(&view->request_move.link);
+        wl_list_remove(&view->request_resize.link);
+        wl_list_remove(&view->new_subsurface.link);
+        wl_list_remove(&view->link);
+
+        // Detach child subsurfaces from this view to prevent Use-After-Free
+        SparrowSubSurface *sub, *sub_tmp;
+        wl_list_for_each_safe(sub, sub_tmp, &view->subsurfaces, link)
+        {
+            sub->parent_view = nullptr;
+            wl_list_remove(&sub->link);
+            wl_list_init(&sub->link);
+        }
+
+        // Detach child popups from this view to prevent Use-After-Free
+        Core *core = Core::instance();
+        if (core && core->popups)
+        {
+            for (const auto &[popup_handle, popup_value] : *core->popups)
+            {
+                auto *pop = static_cast<SparrowPopup*>(popup_value);
+                if (pop && (pop->parent_view == view))
+                {
+                    pop->parent_view = nullptr;
+                }
+            }
+        }
     }
-
-    if (view->foreign_toplevel != nullptr)
-    {
-        wl_list_remove(&view->foreign_activate_request.link);
-        wl_list_remove(&view->foreign_close_request.link);
-        wl_list_remove(&view->foreign_maximize_request.link);
-        wl_list_remove(&view->foreign_minimize_request.link);
-        wl_list_remove(&view->foreign_fullscreen_request.link);
-        wlr_foreign_toplevel_handle_v1_destroy(view->foreign_toplevel);
-        view->foreign_toplevel = nullptr;
-    }
-
-    if (view->ext_foreign_toplevel != nullptr)
-    {
-        wlr_ext_foreign_toplevel_handle_v1_destroy(view->ext_foreign_toplevel);
-        view->ext_foreign_toplevel = nullptr;
-    }
-
-    wl_list_remove(&view->map.link);
-    wl_list_remove(&view->unmap.link);
-    wl_list_remove(&view->destroy.link);
-    wl_list_remove(&view->commit.link);
-    wl_list_remove(&view->set_title.link);
-    wl_list_remove(&view->set_app_id.link);
-    wl_list_remove(&view->request_move.link);
-    wl_list_remove(&view->request_resize.link);
-    wl_list_remove(&view->new_subsurface.link);
-    wl_list_remove(&view->link);
-
-    // Detach child subsurfaces from this view to prevent Use-After-Free
-    SparrowSubSurface *sub, *sub_tmp;
-    wl_list_for_each_safe(sub, sub_tmp, &view->subsurfaces, link)
-    {
-        sub->parent_view = nullptr;
-        wl_list_remove(&sub->link);
-        wl_list_init(&sub->link);
-    }
-
-    pthread_mutex_unlock(&instance->sparrow_renderer.texture_mutex);
 
     delete (view);
 }
@@ -567,6 +703,11 @@ static void xdg_toplevel_request_resize(struct wl_listener *listener,
 void sparrow_handle_xdg_activation_request_activate(
     struct wl_listener *listener, void *data)
 {
+    if (sparrow_is_session_locked())
+    {
+        return;
+    }
+
     Core *instance = Core::instance();
     struct wlr_xdg_activation_v1_request_activate_event *event =
         static_cast<struct wlr_xdg_activation_v1_request_activate_event*>(data);
