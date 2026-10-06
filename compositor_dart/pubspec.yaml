@@ -22,6 +22,9 @@ dependencies:
   rxdart: ^0.28.0
 
 dev_dependencies:
+  # analyzer 14.5.0 removed AnalysisOptionsImpl.contextFeatures, still used by
+  # build_runner 2.16.1. Remove this cap once build_runner is fixed upstream.
+  analyzer: ">=14.0.0 <14.5.0"
   build_runner: ^2.16.1
   flutter_test:
     sdk: flutter
