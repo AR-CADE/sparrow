@@ -1,0 +1,18 @@
+name: pigeon_compositor
+description: A starting point for Dart libraries or applications.
+version: 1.0.0
+# repository: https://github.com/my_org/my_repo
+
+environment:
+  sdk: ^3.13.5
+
+# Add regular dependencies here.
+dependencies:
+  flutter:
+    sdk: flutter
+  pigeon: ^29.0.8
+  # path: ^1.9.0
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.32.0

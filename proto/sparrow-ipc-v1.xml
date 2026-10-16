@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="sparrow_ipc_v1">
+  <copyright>
+    Copyright © 2026 The Sparrow Project
+    SPDX-License-Identifier: GPL-3.0-only
+  </copyright>
+
+  <interface name="sparrow_ipc_manager_v1" version="1">
+    <description summary="manager for secure private IPC channels">
+      This global interface allows authorized clients to obtain an anonymous,
+      kernel-isolated socketpair file descriptor for bidirectional IPC with
+      the Sparrow compositor.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        Destroy the sparrow_ipc_manager_v1 object.
+      </description>
+    </request>
+
+    <request name="get_ipc_channel">
+      <description summary="request an anonymous secure IPC socket">
+        Requests the compositor to create a private socketpair and send
+        the client-side file descriptor back via the ipc_channel event.
+      </description>
+      <arg name="app_id" type="string" summary="application identifier"/>
+    </request>
+
+    <event name="ipc_channel">
+      <description summary="delivers the private socketpair file descriptor">
+        Transfers the private file descriptor of the socketpair to the client.
+      </description>
+      <arg name="fd" type="fd" summary="private socketpair file descriptor"/>
+    </event>
+  </interface>
+</protocol>
