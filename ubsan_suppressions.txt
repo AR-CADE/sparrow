@@ -1,0 +1,3 @@
+# UndefinedBehaviorSanitizer (UBSan) suppression file for Sparrow
+# Usage: UBSAN_OPTIONS="suppressions=ubsan_suppressions.txt"
+# Format: type:function_name or type:source_file

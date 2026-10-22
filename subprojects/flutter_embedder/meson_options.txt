@@ -1,0 +1,12 @@
+option(
+    'engine_commit',
+    type: 'string',
+    value: 'deb287481e3ce9468f3434937ced4240a70539ca',
+    description: 'Commit of engine build to use',
+)
+option(
+    'engine_embedder_hash',
+    type: 'string',
+    value: '',
+    description: 'If present, sha256 hash to validate embedder build',
+)
