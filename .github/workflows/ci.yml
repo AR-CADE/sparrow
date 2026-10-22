@@ -78,6 +78,7 @@ jobs:
         run: |
           export PATH="$HOME/.local/share/flutter/bin:$PATH"
           cd ./compositor_dart
+          flutter pub get
           dart analyze
           dart fix --apply
           dart format --set-exit-if-changed .
@@ -87,6 +88,7 @@ jobs:
         run: |
           export PATH="$HOME/.local/share/flutter/bin:$PATH"
           cd ./shell
+          flutter pub get
           dart analyze
           dart fix --apply
           dart format --set-exit-if-changed .
