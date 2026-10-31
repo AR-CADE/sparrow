@@ -1,0 +1,888 @@
+# 🐦 Sparrow
+
+> **Next-Generation Wayland Compositor powered by wlroots and a Flutter Desktop Shell.**
+
+Sparrow is a modern, high-performance Wayland compositor featuring a unique **hybrid architecture**:
+
+- **C++ wlroots Server**: Handles DRM/KMS, EGL/GLES, libinput, DMA-BUF zero-copy buffer sharing, Wayland protocol extensions, and precise damage tracking.
+- **Flutter Desktop Shell Client**: Drives the entire user interface, window management animations, touch/trackpad gestures, overview transitions, docks, and desktop widgets with **Flutter Impeller / GLES 3.2**.
+
+<a id="summary"></a>
+
+## Summary
+
+<ul>
+  <li><a href="#showcase">Showcase</a></li>
+  <li><a href="#key-features">Key Features</a></li>
+  <li><a href="#architecture">Architecture</a></li>
+
+  <li><a href="#building-sparrow">Building Sparrow</a>
+    <ul>
+      <li><a href="#prerequisites">Prerequisites</a></li>
+      <li><a href="#compilation-modes">Compilation Modes & Flutter Engine Setup</a>
+       <ul>
+          <li><a href="#release-mode">Release Mode (Production & Maximum Performance)</a></li>
+          <li><a href="#profile-mode"> Profile Mode & Flutter DevTools (Dart VM Service & Profiling)</a></li>
+       </ul>
+      </li>
+      <li><a href="#build-commands">Build Commands</a></li>
+      <li><a href="#csir-bolt-pipeline">Advanced CSIR PGO + LTO + BOLT Optimization Pipeline</a></li>
+      <li><a href="#automated">Automated UI Testing, PGO Pipeline & CI/CD</a></li>
+      <li><a href="#flutter-testing-coverage-doc">Flutter Testing, Coverage & Documentation</a></li>
+    </ul>
+  </li>
+  <li><a href="#sparrow-app-runner">Sparrow App Runner (Native Wayland Flutter Client)</a></li>
+  <li><a href="#running-sparrow">Running Sparrow</a></li>
+  <li><a href="#configuration">Runtime configuration, Hotkeys & CLI Options</a>
+  <ul>
+    <li><a href="#ini">INI configuration file</a></li>
+    <li><a href="#hotkeys">Interactive Hotkeys
+</a></li>
+    <li><a href="#commandlines">Command Line Options</a></li>
+  </ul>
+  </li>
+  <li><a href="#performance">GPU & Performance Tracing (Perfetto & RenderDoc)</a></li>
+  <li><a href="#security">Sanitizers & Memory Safety Testing</a></li>
+  <li><a href="#roadmap">Next Steps & Roadmap</a></li>
+  <li><a href="#license">License</a></li>
+  <li><a href="#acknowledgments">Acknowledgments & Inspirations</a></li>
+  <li><a href="#contact">Contact</a></li>
+</ul>
+
+<a id="showcase"></a>
+<h2>
+  📸 Showcase
+  <a href="#summary" title="Summary" style="float: right; text-decoration: none;">⬆</a>
+</h2>
+
+![Sparrow](assets/screenshots/sparrow.gif)
+
+| Desktop Overview | Gaming | Precise Damage Tracking & FPS OSD | Web |
+| :---: | :---: | :---: | :---: |
+| ![Overview](assets/screenshots/overview.png) | ![Gaming](assets/screenshots/gaming.png) | ![OSD](assets/screenshots/damage1.jpg) | ![Web](assets/screenshots/web.png) |
+
+<a id="key-features"></a>
+
+## ⚡ Key Features
+
+- **🚀 Zero-Copy DMA-BUF Hardware Rendering**:
+  Wayland client surfaces (games, video players, browsers) are directly imported as hardware textures into the compositor pipeline with zero CPU memory copies.
+- **📺 Direct Scanout for Fullscreen Applications**:
+  Direct hardware scanout/blit for fullscreen Wayland applications and games (including software-rendered `wl_shm` clients) with dynamic damage tracking, hardware/software cursor overlays, and seamless zero-latency yielding to Flutter shell gestures (docks, overview).
+- **⚡ Zero-Copy `udmabuf` Acceleration for `wl_shm`**:
+  Automatically converts CPU-rendered shared memory buffers (`wl_shm` from Qt apps, software-rendered tools) into hardware DMA-BUFs via Linux `/dev/udmabuf`, eliminating costly CPU-to-GPU PCIe uploads (`glTexSubImage2D`) and cutting CPU usage by up to ~70%.
+  see ([Making wl_shm fast](https://zamundaaa.github.io/wayland/2026/05/06/making-wl-shm-fast.html))
+- **⏱️ Soft-Realtime Compositor Scheduling (`SCHED_RR`)**:
+  Runs the compositor rendering and VSync pipeline with soft-realtime round-robin priority (`SCHED_RR`, priority 20). Uses `SCHED_RESET_ON_FORK` so spawned user processes (games, terminals, apps) automatically run with standard scheduling, guaranteeing microsecond preemption and jitter-free frame pacing even under heavy CPU compile/gaming loads.
+- **🧵 Flutter Isolates (`IsolateNameServer`) & Thread-Safe Wayland Dispatcher**:
+  Full support for background Flutter isolates (`Isolate.spawn()`) with cross-isolate port registry via `flutter/isolate`. Features a lock-free/low-latency kernel `eventfd` dispatcher (`sparrow_dispatch_to_wayland`) allowing background worker isolates (D-Bus authentication, virtualization, heavy system tasks) to safely manipulate Wayland/wlroots state without locking or stalling the 60/144Hz compositor UI loop.
+- **🛡️ Triple Buffering & Late-Latching (Mailbox Mode)**:
+  Hardware DRM/GBM swapchain with 3+ buffer rotation combined with a 3-frame historical damage ring (`NUM_DAMAGE_HISTORY 3`). Eliminates VSync backpressure stalls and micro-stuttering under high GPU/CPU load while Late-Latching guarantees that games and video surfaces always sample the freshest available committed frame with minimal input latency.
+- **🎯 Precise Damage Tracking & Damage History**:
+  Maintains a 4-frame damage ring buffer. Only regions that actually change on screen are redrawn and swapped, reducing GPU and power consumption to minimum.
+- **🖥️ [XWayland-satellite](https://github.com/Supreeeme/xwayland-satellite) Support**:
+  Transparent execution and management of legacy X11 applications alongside native Wayland clients.
+- **🕊️ Strongly-Typed Pigeon Embedder IPC**:
+  All communications between the C++ wlroots server and Flutter are generated via Flutter **Pigeon**.
+- **✨ Fluid UI & Flutter Ecosystem**:
+  Leverages the full expressive power of Flutter (custom shaders, smooth spring animations, rich widget library, vector graphics).
+- **🔍 Smooth Full-Desktop Zoom**:
+  Butter-smooth desktop screen magnifier.
+- **🛠️ Built-in Real-Time Diagnostics & Profiling**:
+  - **FPS & Frame Latency OSD** (`F11` / `--fps`): Real sliding-window client commit measurement and render frame latency.
+  - **Surface Tree Inspector** (`F10` / `--inspect`): Instant colorized ASCII dump of all active outputs, toplevels, subsurfaces, and popups.
+  - **Live Damage Rainbow Visualizer** (`F12` / `--debug-damage`): Real-time colored borders outlining redrawn damage rectangles.
+  - **GPU Debug Markers & Profiling** (`-G` / `--trace-gpu`): Nested `glPushDebugGroup` scopes for **RenderDoc**, NVIDIA Nsight, and Mali Graphics Debugger.
+  - **Perfetto & Ftrace CPU Tracing** (`--trace`): Direct kernel `trace_marker` integration for system-wide timeline profiling on [ui.perfetto.dev](https://ui.perfetto.dev).
+- **🔒 Session Lock Protocol (`ext-session-lock-v1`)**
+- **⚡ Ultra-Fast SIMD-Accelerated IPC (`simdjson`)**:
+  Replaced legacy JSON parsers with `simdjson` and zero-copy binary serialization, delivering 2.3x to 5.08x faster IPC throughput (up to 16.4M msg/s) across compositor, runner, and Flutter embedder channels.
+- **🔄 Screen Rotation & Output Transform**:
+  Dynamic display rotation and transformation support (`normal`, `90`, `180`, `270`, `flipped`) via `wlr-randr` and Wayland output management protocols, preserving viewport geometries, direct scanout constraints, and input mapping.
+- **🔒 Sensitive Content Protection & Privacy Shield**:
+  Hardware-accelerated privacy masking preventing sensitive information (password managers, banking apps, private messaging, DRM media) from leaking into screen captures and video recordings. Supported via Flutter's official `SensitiveContent` widget (`flutter/sensitivecontent` in `sparrow-app-runner`), Wayland protocols (`zcr_secure_output_v1`), and declarative `sparrow.ini` configuration (`[Secure-Content]`).
+- **⚙️ Native Process Supervisor & Daemon Management (`sparrow-services-monitor`)**:
+  Integrated system service supervisor running directly on the Wayland event loop. Monitors background daemons using Linux `pidfd` lifecycle tracking with exponential crash backoff. Supports one-shot commands (`normal`) and auto-restarting background daemons (`restartable`) configured via `sparrow.ini`. Includes dedicated CLI client `sparrow-services-monitor` communicating over zero-trust Wayland IPC (`sparrow_ipc_manager_v1`).
+- **🛡️ Live GPU Reset Recovery & Texture Rehydration**:
+  Seamless in-process recovery after GPU context loss, driver hangs, or crashes without terminating the compositor or disconnecting Wayland clients. Automatically re-instantiates `wlr_allocator`, `wlr_renderer`, and EGL contexts on the fly, performing texture rehydration with `udmabuf` and SHM pixel readbacks to preserve client surface buffers. Triggerable live via kernel/EGL context reset notifications (`wlr_renderer->events.lost`), or via simulation triggers (`SIGUSR2` signal, `F5` hotkey; require `--debug-gpureset`).
+- **💾 Flutter State Restoration Framework**:
+  Full native support for Flutter's State Restoration mechanism (`RestorationScope`, `restorationId`) via dedicated platform channels. Desktop shell layouts, window topology, active workspace indices, and PageView navigation states are persistently preserved and restored across engine reloads, compositor lifecycle events, and live GPU recoveries without UI state loss.
+
+<a id="architecture"></a>
+
+## 🏗️ Architecture
+
+Sparrow bridges the low-level Linux graphics stack with the Flutter reactive UI engine:
+
+![Sparrow](doc/architecture.png)
+
+<a id="building-sparrow"></a>
+
+## 🛠️ Building Sparrow
+
+<a id="prerequisites"></a>
+
+### Prerequisites
+
+Make sure you have the required development libraries installed:
+
+- `clang` / `clang++` (C++26 support)
+- `meson` & `ninja`
+- `wayland-protocols`, `libwayland(devel)`
+- `libdrm(devel)`, `libinput(devel)`, `libxkbcommon(devel)`, `libpixman(devel)`
+- `libegl(devel)`, `libgles2(devel)`, `libgbm(devel)`, `libdisplay-info(devel)`
+- `vulkan(devel)` / `vulkan-headers` / `libvulkan(devel)` (for Vulkan Wayland runner & Impeller backend)
+- Flutter SDK (on `PATH`)
+- `cmake` (for Flutter development)
+- `ccache`
+- `wlrctl` (bundled & built automatically via Meson subproject wrap)
+- `llvm-bolt` / `perf` / `llvm-profdata` (for CSIR PGO + LTO + BOLT ultra-optimized builds)
+
+<a id="compilation-modes"></a>
+
+### 🔬 Compilation Modes & Flutter Engine Setup
+
+Sparrow embeds the Flutter Engine in **AOT (Ahead-of-Time)** mode for maximum performance and low latency. Depending on your workflow, you can build Sparrow in **Release** or **Profile** mode:
+
+```none
+                      ┌───────────────────────────────────────────────┐
+                      │             Choose Build Workflow             │
+                      └───────┬───────────────────────────────┬───────┘
+                              │                               │
+                Release Mode  ▼                 Profile Mode  ▼
+         ┌───────────────────────────┐         ┌───────────────────────────┐
+         │ 1. Compile Release Engine │         │ 1. Compile Profile Engine │
+         │    ./build_engine.sh      │         │    ./build_engine.sh      │
+         │         release           │         │         profile           │
+         └─────────────┬─────────────┘         └─────────────┬─────────────┘
+                       ▼                                     ▼
+         ┌───────────────────────────┐         ┌───────────────────────────┐
+         │ 2. Build Sparrow Release  │         │ 2. Build Sparrow Profile  │
+         │    ./build.sh release     │         │    ./build.sh profile     │
+         │ (or --host-path=...)      │         │ --host-path=host_profile  │
+         └─────────────┬─────────────┘         └─────────────┬─────────────┘
+                       ▼                                     ▼
+         ┌───────────────────────────┐         ┌───────────────────────────┐
+         │ 3. Run High-Performance   │         │ 3. Run & Attach DevTools  │
+         │    ./out/sparrow          │         │ ./out/sparrow --vm-service│
+         │  (Stripped AOT Product)   │         │  flutter attach (Port 8181)│
+         └───────────────────────────┘         └───────────────────────────┘
+```
+
+<a id="release-mode"></a>
+
+### 1. Release Mode (Production & Maximum Performance)
+
+In release mode, Sparrow compiles the Flutter Shell with `-Ddart.vm.product=true` for maximum CPU/GPU efficiency, stripping debugging overhead:
+
+- **Prerequisite**: Ensure a release `libflutter_engine.so` is installed in your system (`~/.local/lib64/` or `/usr/lib64/`), or built locally via `./build_engine.sh [<flutter_version>] release`.
+- **Build**:
+
+  ```bash
+  # Using system-installed engine:
+  ./build.sh release
+
+  # Or using a custom local engine:
+  ./build.sh release --host-path=flutter/engine/host_release
+  ```
+
+---
+
+*(NOTE: It's recommended to copy the generated artifacts to `[sparrow_src_dir]/flutter/engine/host_release/`)*
+<a id="profile-mode"></a>
+
+### 2. Profile Mode & Flutter DevTools (Dart VM Service & Profiling)
+
+In profile mode, Sparrow compiles the Flutter Shell in AOT with `-Ddart.vm.profile=true` and starts the **Dart VM Service** (WebSocket JSON-RPC server) on port `8181`. This enables live widget inspection, memory heap analysis, frame rendering timeline, and CPU profiling via Flutter DevTools.
+
+#### Step 1: Compile the Flutter Engine in Profile Mode
+
+Because pre-built public embedder binaries from Google exclude the VM service, you must build the engine once in profile mode:
+
+```bash
+./build_engine.sh [<flutter_version>] profile
+
+(example: ./build_engine.sh 3.47.7 profile, or simply run ./build_engine.sh profile to build the flutter's master branch)
+```
+
+*(NOTE: It's recommended to copy the generated artifacts to `[sparrow_src_dir]/flutter/engine/host_profile/`)*
+
+#### Step 2: Build Sparrow in Profile Mode
+
+Compile Sparrow pointing to the profile engine artifacts:
+
+```bash
+./build.sh profile --host-path=flutter/engine/host_profile
+```
+
+#### Step 3: Run Sparrow with Dart VM Service
+
+Launch the compositor with the `--vm-service` flag:
+
+```bash
+./out/sparrow --vm-service
+```
+
+*(Log output will show: `[flutter] The Dart VM service is listening on http://127.0.0.1:8181/`)*
+
+#### Step 4: Connect Flutter DevTools
+
+In a separate terminal, attach DevTools to the running compositor:
+
+```bash
+cd shell
+flutter attach --debug-uri=http://127.0.0.1:8181/
+```
+
+Or open `http://127.0.0.1:8181/` directly in your browser to inspect widget trees, monitor memory allocations, and analyze Impeller frame render times.
+
+<a id="build-commands"></a>
+
+### Build Commands
+
+Use the universal `./build.sh` script to build the project:
+
+```bash
+# 1. Full Release Build
+./build.sh csir-bolt   # Automated 4-stage CSIR PGO + LTO + BOLT pipeline (highest performance)
+./build.sh             # Standard automated 3-stage Frontend PGO pipeline
+
+# 2. Fast C++ Server Rebuild (~8-10 seconds)
+./build.sh server
+
+# 3. Flutter Shell Client Rebuild
+./build.sh client
+
+# 4. Profile Build (Enables Dart VM Service & DevTools inspection)
+./build.sh profile --host-path=flutter/engine/host_profile
+
+# 5. Optimize Flutter Engine with LLVM BOLT
+./build.sh bolt-engine
+
+# 6. Debug Build with Debug Symbols
+./build.sh debug server
+
+# 7. Sanitizer Builds for Safety & Bug Hunting
+./build.sh asan        # AddressSanitizer
+./build.sh ubsan       # UndefinedBehaviorSanitizer
+./build.sh tsan        # ThreadSanitizer
+./build.sh valgrind    # Valgrind memory detector
+
+# 8. Regenerate Pigeon C++ and Dart message bindings
+./build.sh pigeon
+
+# 9. Clean build artifacts
+./build.sh clean
+```
+
+For all build options, run `./build.sh -h`.
+
+<a id="csir-bolt-pipeline"></a>
+
+### ⚡ Advanced CSIR PGO + LTO + BOLT Optimization Pipeline
+
+Sparrow incorporates an advanced 4-stage optimization pipeline combining **Context-Sensitive IR-level Profile-Guided Optimization (CSIR PGO)**, **ThinLTO**, and **LLVM BOLT** (Binary Optimization and Layout Tool) post-link code layout reordering. This configuration delivers the absolute highest instruction-cache efficiency, branch prediction accuracy, and frame pacing throughput for production deployments.
+
+#### 1. Required Tools & Packages
+
+To execute the full CSIR PGO + BOLT pipeline, ensure the following utilities are installed:
+
+- **LLVM Toolchain**: `clang`, `lld`, `llvm-profdata`
+- **LLVM BOLT**: `llvm-bolt`, `perf2bolt`, `merge-fdata`, `llvm-strip` (packaged as `llvm-bolt` or built from LLVM monorepo)
+- **Linux perf**: `perf` (packaged as `linux-tools`, `kernel-tools`, or `perf` matching your running kernel)
+- **Workload Clients**: Wayland clients used during training runs (e.g. `alacritty`, `weston-terminal`, or Vulkan test clients configured in `tools/bot/pgo_apps.json`)
+
+*(Note: If `llvm-bolt` or `perf` is not detected on your system, `./build.sh csir-bolt` will safely and gracefully fallback to a fully optimized CSIR PGO + ThinLTO release binary without failing).*
+
+#### 2. Mandatory Kernel sysctl Configuration
+
+For `perf` to record processor **LBR (Last Branch Record)** hardware branch samples and profile execution across process boundaries without root privileges, the following Linux kernel sysctl parameters **must** be set prior to starting the build:
+
+```bash
+sudo sysctl -w kernel.yama.ptrace_scope=0
+sudo sysctl -w kernel.perf_event_paranoid=-1
+```
+
+#### [!] **Why these parameters are required:**
+>
+> - `kernel.perf_event_paranoid=-1`: Allows unprivileged users to capture raw hardware performance monitoring counters and CPU LBR branch traces (`perf record -e cycles:u -j any,u`). With default distributions settings (`>= 1` or `2`), `perf` refuses to collect branch records, which prevents `perf2bolt` from generating execution branch data (`*.fdata`).
+> - `kernel.yama.ptrace_scope=0`: Enables tracing and event capture across child process hierarchies, ensuring that `perf` wrappers can monitor the compositor and injected client windows across multi-process test scenarios.
+
+#### 3. The 4-Stage Optimization Pipeline
+
+The pipeline is fully automated by running:
+
+```bash
+# Automated headless execution (ideal for servers and background compilation):
+./build.sh csir-bolt
+
+# Or with display window enabled:
+./build.sh csir-bolt --no-headless
+```
+
+```none
+┌────────────────────────────────────────────────────────────────────────┐
+│               Stage 1: LLVM IR-PGO Instrumentation                    │
+│  - Compile with -fprofile-generate=out/csir_profiles/ir                │
+│  - Run PageView / Overview + automated workload bot                    │
+│  - Merge into sparrow_ir.profdata via llvm-profdata                    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│         Stage 2: Context-Sensitive IR PGO Instrumentation              │
+│  - Compile with -fcs-profile-generate=out/csir_profiles/csir           │
+│  - Re-run identical training workloads under realistic load            │
+│  - Merge Stage 1 + Stage 2 into sparrow_csir.profdata                  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│              Stage 3: CSIR + ThinLTO Release Compilation               │
+│  - Compile release binary using -fprofile-use=sparrow_csir.profdata   │
+│  - Enable ThinLTO and preserve relocations (-Wl,--emit-relocs)         │
+│  - Produces relocation-intact binary out/sparrow                       │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│             Stage 4: Post-Link Binary Optimization via BOLT            │
+│  - Profile binary under Linux perf with LBR (cycles:u -j any,u)       │
+│  - Aggregate branch samples using perf2bolt and merge-fdata            │
+│  - Run llvm-bolt with -reorder-blocks=ext-tsp -reorder-functions=cdsort│
+│  - Split cold code (-split-functions -split-all-cold) & strip symbols │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4. Optimizing the Flutter Engine with BOLT
+
+You can also apply post-link layout optimization to the Flutter Engine shared library (`libflutter_engine.so`) using the dedicated engine BOLT script:
+
+```bash
+# Automatically profiles and optimizes libflutter_engine.so with LLVM BOLT:
+./build.sh bolt-engine
+```
+
+NOTE: The PGO build process requires some tools and dependencies to be installed, like `vkcube`, `vkgears`, `vkmark`, `vkcubepp`, `xwayland-run`, `glxgears`, etc. You can modify the PGO applications pipeline by editing `tools/bot/pgo_apps.json`.
+
+<a id="automated"></a>
+
+### 🤖 Automated UI Testing, PGO Pipeline & CI/CD
+
+### 1. Comprehensive Automated Test Suite (`test_all.sh`)
+
+Executes all regression, protocol, and pacing test suites sequentially (in headless or display mode):
+
+```bash
+# Run the complete automated test suite in headless mode:
+./tools/bot/test_all.sh --headless
+```
+
+Includes:
+
+- **Fixed-Size Window & Letterbox** (`fixed_size_test.sh`)
+- **Popup Rotation & Dynamic Constraint** (`popup_rotation_test.sh`)
+- **Pointer Calibration & Subpixel Precision** (`pointer_calibration_test.sh`)
+- **PageView, Overview & Dart VM Service Integration** (`pageview_overview_test.sh`)
+- **Fullscreen Direct Scanout & `wl_shm`** (`fullscreen_scanout_test.sh`)
+- **Secure Content & Privacy Protection** (`secure_content_test.sh`)
+- **Process Supervisor & Startup Services** (`startup_test.sh`)
+- **GPU Soft Reset & Recovery** (`gpu_reset_test.sh`)
+- **Jank / Frame Pacing Regression Monitor** (`jank_frame_test.sh`)
+- **Declarative App Workload Bot** (`sparrow_bot.sh`)
+
+### 2. Automated Test Runner (`sparrow_bot.sh`)
+
+Injects synthetic pointer, touch, and keyboard interactions using `wlrctl`, launches test Wayland client windows (`weston-terminal`), and verifies clean compositor startup and shutdown:
+
+```bash
+# Run a standard 5-second regression test:
+./tools/bot/sparrow_bot.sh --duration=5
+
+# Run in background Headless mode (no display/window needed):
+./tools/bot/sparrow_bot.sh --headless --duration=5
+```
+
+### 3. Automated 3-Stage PGO Pipeline (`pgo_optimize.sh`)
+
+Profiles realistic compositor execution scenarios and generates an ultra-optimized native binary:
+
+```bash
+# Interactive PGO compilation (displays live test execution):
+./tools/bot/pgo_optimize.sh
+
+# Headless PGO compilation (ideal for background compilation or CI/CD runners):
+./tools/bot/pgo_optimize.sh --headless
+```
+
+### 4. Docker Container & Continuous Integration
+
+Run the entire build and automated test suite inside a self-contained container:
+
+```bash
+# Build the Docker CI image:
+docker build -t sparrow-ci .
+
+# Execute full build and automated headless regression test bot:
+docker run --rm sparrow-ci
+```
+
+*(Sparrow also includes an automated GitHub Actions CI workflow in `.github/workflows/ci.yml`)*
+
+<a id="flutter-testing-coverage-doc"></a>
+
+### 🧪 Flutter Testing, Code Coverage & Documentation
+
+Sparrow's Dart architecture is split into two modular packages following strict **Clean Architecture + BLoC** design patterns with **0 StatefulWidget** components (100% pure `StatelessWidget` and BLoCs):
+
+- **`compositor_dart/`**: Core compositor platform bridge, Pigeon RPC handling, and Wayland view widgets (`SurfaceView`, `PopupView`, `SubSurfaceView`).
+- **`shell/`**: Wayland desktop shell application (`ShellView`, `ShellPageView`, `TaskBar`, `SystemGrid`).
+
+Both packages maintain comprehensive test suites achieving **over 90% code coverage** and strict static analysis validation under `very_good_analysis`.
+
+#### 1. Running Unit & Widget Tests
+
+Execute test suites for both packages:
+
+```bash
+# Test compositor_dart package (160+ unit/widget tests):
+cd compositor_dart
+flutter test
+
+# Test shell package (170+ unit/widget tests):
+cd ../shell
+flutter test
+```
+
+#### 2. Collecting Code Coverage & Generating HTML Reports
+
+To measure statement coverage and visualize covered/uncovered lines in an interactive HTML report:
+
+```bash
+# 1. Run tests with coverage collection (generates coverage/lcov.info):
+cd compositor_dart  # (or cd shell)
+flutter test --coverage
+
+# 2. Generate a visual HTML coverage report using lcov/genhtml:
+genhtml coverage/lcov.info -o coverage/html
+
+# 3. Open the report in your web browser:
+xdg-open coverage/html/index.html
+```
+
+*(Note: `genhtml` is provided by the `lcov` package: `sudo zypper in lcov` or `sudo apt install lcov`).*
+
+#### 3. Generating Dart API Documentation
+
+To generate comprehensive API reference documentation for the packages:
+
+```bash
+# Generate HTML API documentation in doc/api/:
+cd compositor_dart  # (or cd shell)
+dartdoc .
+
+# View documentation in browser:
+xdg-open doc/api/index.html
+```
+
+---
+
+<a id="sparrow-app-runner"></a>
+
+## 🏃 Sparrow App Runner (Native Wayland Flutter Client)
+
+`sparrow-app-runner` is a standalone, ultra-lightweight Wayland client runtime embedder designed to execute Flutter applications as pure Wayland native windows without GTK+, X11, or desktop environment dependencies.
+
+### Key Capabilities
+
+- **Zero GTK Overhead**: Bypasses `libflutter_linux_gtk.so` entirely, communicating directly with the Wayland compositor via `libwayland-client` and `xdg-shell`.
+- **Dual Rendering Backends**:
+  - **OpenGL ES 3.2** via EGL (default).
+  - **Vulkan 1.3** native swapchain (`--vulkan`) with selectable presentation modes (`fifo`, `mailbox`, `immediate`) and optional validation layers (`--vk-validation`).
+- **Wayland Input Subsystem**: Complete keyboard mapping, pointer motion, subpixel scrolling, multi-touch, and trackpad gestures.
+- **Compositor IPC**: Integrates with Sparrow's zero-trust kernel socketpair IPC protocol (`sparrow_ipc_manager_v1`).
+- **Session Lock Protocol**: Supports running as an `ext-session-lock-v1` lock screen application (`--session-lock`).
+
+### CLI Options & Usage
+
+```bash
+# Basic invocation with an application bundle directory:
+./out/sparrow-app-runner out/shell
+./out/sparrow-app-runner --bundle=out/my_app
+
+# Launch with Vulkan swapchain backend:
+./out/sparrow-app-runner --vulkan out/my_app
+
+# Launch with Vulkan mailbox present mode (uncapped FPS / low-latency):
+./out/sparrow-app-runner --vulkan --vk-present-mode=mailbox out/my_app
+
+# Launch in fullscreen or maximized mode with custom window title and app_id:
+./out/sparrow-app-runner --fullscreen --app-id=my.game.app --title="My Game" out/my_app
+
+# Launch as a session lock client (ext-session-lock-v1):
+./out/sparrow-app-runner --session-lock out/my_lockscreen
+```
+
+| Option | Description |
+| :--- | :--- |
+| `--bundle=<path>` | Path to the Flutter application bundle directory. |
+| `--assets-path=<path>` | Custom path to the `flutter_assets` directory. |
+| `--icu-data-path=<path>` | Custom path to `icudtl.dat`. |
+| `--aot-elf-path=<path>` | Custom path to the compiled AOT ELF (`app.so`). |
+| `--app-id=<id>` | Wayland `xdg_toplevel` application identifier (default: `sparrow.flutter.app`). |
+| `--title=<title>` | Window title string (default: `Flutter Application`). |
+| `--width=<px>`, `--height=<px>` | Initial client window dimensions (default: 1280x720). |
+| `--fullscreen` | Launch window in fullscreen mode. |
+| `--maximized` | Launch window maximized. |
+| `--vulkan` | Use native Vulkan swapchain instead of OpenGL ES/EGL. |
+| `--vk-present-mode=<mode>` | Swapchain present mode: `fifo` (default, vsync), `mailbox` (triple buffer), `immediate`. |
+| `--vk-validation` | Enable Vulkan Khronos validation layers (debug builds). |
+| `--session-lock`, `--lock` | Run application as an `ext-session-lock-v1` secure lock surface. |
+
+---
+
+### Process Supervision & Compositor IPC (`sparrow-services-monitor`)
+
+Sparrow embeds a native process supervisor on the Wayland main event loop. It parses the `[Services]` and `[Init]` sections of `sparrow.ini` and supervises daemon lifecycles using Linux `pidfd` tracking (`pidfd_open`) and exponential crash backoff. Applications and CLI tools can query and control services through the Zero-Trust `sparrow_ipc_manager_v1` protocol:
+
+```bash
+# Query active managed services and uptime:
+./out/sparrow-services-monitor --list
+
+# Start, stop, or restart a supervised daemon:
+./out/sparrow-services-monitor --start [SERVICE_NAME]
+./out/sparrow-services-monitor --stop [SERVICE_NAME]
+./out/sparrow-services-monitor --restart [SERVICE_NAME]
+
+# Test IPC connectivity with the compositor:
+./out/sparrow-services-monitor --ping
+```
+
+| IPC Method | Parameters | Description |
+| :--- | :--- | :--- |
+| `listServices` (or `listCommands`) | *none* | Returns a JSON array of all managed services with their `id`, `command`, `type`, `state`, `pid`, `restart_count`, and `uptime_ms`. |
+| `startService` (or `startCommand`) | `{"id": "<id>", "command": "...", "type": "normal\|restartable"}` | Starts an existing or dynamically registered service. |
+| `stopService` (or `stopCommand`) | `{"id": "<id>", "signal": 15}` | Stops a running service without triggering automatic respawn. |
+| `restartService` (or `restartCommand`) | `{"id": "<id>"}` | Restarts a running or stopped service. |
+| `ping` | *none* | Verifies zero-trust IPC socketpair connectivity and compositor health. |
+| `onServiceStateChanged` | *notification event* | Broadcast to connected clients whenever a supervised process transitions between `running`, `stopped`, `crashed`, or `backoff`. |
+
+---
+
+### Creating & Optimizing a Flutter App for Sparrow
+
+To achieve minimum binary size, fastest cold startup, and optimal memory footprint, convert standard Flutter Linux builds into optimized Sparrow Wayland bundles using `./tools/optimize_bundle.sh`:
+
+#### Step 1: Build the Flutter Application
+
+```bash
+cd my_app
+flutter clean
+flutter pub get
+flutter build linux --release
+```
+
+#### Step 2: Optimize the Bundle with `tools/optimize_bundle.sh`
+
+```bash
+# Optimize the build output and generate out/my_app:
+./tools/optimize_bundle.sh my_app/build/linux/x64/release/bundle out/my_app
+```
+
+What `optimize_bundle.sh` does automatically:
+
+1. **Strips GTK Overhead**: Completely eliminates `libflutter_linux_gtk.so` and unnecessary GTK wrapper libraries.
+2. **Reorganizes Bundle Structure**: Restructures `data/flutter_assets/` and copies required Unicode tables (`icudtl.dat`).
+3. **Optimizes AOT Snapshot**: Re-runs `gen_snapshot` directly to produce a stripped, production-grade AOT ELF (`app.so`).
+4. **Strips Debug Symbols**: Strips all ELF binaries and shared libraries using `strip --strip-all` or `llvm-strip`.
+
+#### Step 3: Run the Application
+
+```bash
+./out/sparrow-app-runner out/my_app
+```
+
+---
+
+<a id="running-sparrow"></a>
+
+## 🚀 Running Sparrow
+
+Run the compiled executable located in `./out/sparrow`:
+
+```bash
+# Standard Launch
+./out/sparrow
+
+# Launch with Real-Time FPS & Frame Latency OSD
+./out/sparrow -F
+
+# Launch with Wayland Protocol Tracing & Verbose Logs
+./out/sparrow -P -v
+
+# Launch with GPU Debug Markers (RenderDoc / Nsight)
+./out/sparrow -G
+
+# Launch with Damage Debug Visualizer
+./out/sparrow -D
+```
+
+<a id="configuration"></a>
+
+## ⌨️ Runtime configuration, Hotkeys & CLI Options
+
+<a id="ini"></a>
+
+### INI configuration file
+
+Sparrow uses an INI file for runtime configuration. The file is located at `~/.config/sparrow/sparrow.ini`.
+
+```ini
+[Theme]
+wallpaper = [PATH_TO_YOUR_IMAGE] (ex. /home/username/Pictures/image.png)
+
+[Commands]
+launcher = [YOUR_LAUNCHER_APPLICATION]
+terminal = [YOUR_TERMINAL_APPLICATION] (ex. alacritty or foot or kitty or weston-terminal or xterm)
+logout = [YOUR_LOGOUT_APPLICATION] (ex. wayland-logout)
+suspend = [YOUR_SUSPEND_APPLICATION]
+reboot = [YOUR_REBOOT_APPLICATION]
+poweroff = [YOUR_POWEROFF_APPLICATION]
+
+[Quirks]
+filterQuality = [FILTER_QUALITY] (ex. none, low, medium or high)
+
+[Services]
+# Startup scripts & supervised daemons
+# Syntax: <name> = [<type>:]<command>
+# Supported types:
+#   - normal (default): Executed once at startup, not restarted when terminated.
+#   - restartable: Supervised by Sparrow; automatically respawned with backoff on crash/exit.
+#
+# Examples:
+# portal = restartable:xdg-desktop-portal-wlr -r
+# swayidle = restartable:swayidle ......
+# firefox = normal:firefox
+
+
+[Secure-Content]
+# Applications whose windows are automatically censored in screenshots
+# and screen recordings (wlr-screencopy / wlr-export-dmabuf).
+# Matches against xdg_toplevel app_id or window title (case-insensitive).
+# Examples:
+# app_id = rpcs3
+# app_id = org.keepassxc.KeePassXC
+# app_id = com.bitwarden.desktop
+# app_id = mpv
+#
+# Entire output displays can also be censored in screenshots and recordings:
+# Examples:
+# output_name = HDMI-A-1
+# output_name = eDP-1
+```
+
+**NOTE**: Due to the fact that Sparrow does not yet support the layer-shell protocol, the `launcher` must not be set to an application that requires layer-shell to be able to run.
+
+<a id="hotkeys"></a>
+
+### Interactive Hotkeys
+
+| Hotkey | Feature | Description |
+| :---: | :--- | :--- |
+| **`Ctrl` + `Alt` + `Suppr`** | **Logout** | Launches the logout command defined in `sparrow.ini` (see `[Commands].logout` field). |
+| **`Super`** | **Application Launcher** | Launches the application launcher defined in `sparrow.ini` (see `[Commands].launcher` field). |
+| **`Alt Left`** | **Overview Mode** | Toggles show/hide overview of all running applications in a carousel-like view. |
+| **`Super` + `Q`** | **Quit Application** | Closes the focused window or application. |
+| **`Super` + `F`** | **Fullscreen mode** | Toggles on/off fullscreen mode of the focused window or application. |
+| **`Super` + `Enter`** | **Terminal Launcher** | Launches the terminal emulator defined in `sparrow.ini` (see `[Commands].terminal` field). |
+| **`Super` + `Scroll`** | **Desktop Zoom In / Out** | Continuous screen zoom centered smoothly on the cursor. |
+| **`Super` + `+/-`** | **Desktop Zoom Step** | Increments or decrements the screen magnification level. |
+| **`Super` + `0`** | **Reset Desktop Zoom** | Smoothly resets desktop magnification back to 1.0x (100%). |
+| **`Super` + `Left/Right`** | **Navigation** | Moves selection to the next/previous application in the list. |
+| **`Left/Right`** | **Navigation (overview mode only)** | Moves selection to the next/previous application in the list. |
+| **`Space` or `Enter` or `Alt Left`** | **Navigation (overview mode only)** | Close the overview mode. and select the current focused view. |
+| **`F5`** | **Simulate GPU Reset** | Simulates an in-process GPU context loss (`wlr_renderer->events.lost`) to trigger live renderer re-instantiation and texture rehydration (requires `--debug-gpureset`). |
+| **`F6`** | **Perfetto Trace Toggle** | Toggles on/off in-process Perfetto trace recording to `out/sparrow.pftrace` (*requires compile-time `./build.sh trace`*). |
+| **`F7`** | **RenderDoc Frame Capture** | Triggers an immediate frame capture via the RenderDoc in-application API (`renderdoc_app.h`, *requires compile-time `./build.sh trace`*). |
+| **`F8`** | **DPMS Power Toggle** | Toggles the monitor power state (ON/OFF) for the primary display. This is useful for testing sleep/resume behavior and power management capabilities. |
+| **`F9`** | **Buffering Mode Switcher** | Cycles through `Double Buffering (DB)` ➔ `Dynamic Triple Buffering (AUTO)` ➔ `Forced Triple Buffering (TB:ON)`. |
+| **`F10`** | **Surface Tree Inspector** | Dumps the complete hierarchy (Outputs, Views, Subsurfaces, Popups, PIDs, formats) into the terminal (requires `--trace-surfacetree` or `--inspect`). |
+| **`F11`** | **FPS & Latency Monitor** | Toggles the real-time on-screen display (OSD) in the top-right corner. |
+| **`F12`** | **Damage Visualizer** | Toggles rainbow colored bounding boxes around redrawn screen regions. |
+
+<a id="commandlines"></a>
+
+### Command Line Options
+
+> [!NOTE]
+> Options marked with *(compile-time)* require Sparrow to be built with tracing support (`./build.sh trace`). In standard release builds, tracing instrumentation is excluded to guarantee zero runtime overhead.
+
+| Flag | Short | Environment Variable | Description |
+| :--- | :---: | :--- | :--- |
+| `--debug-gpureset` | | `SPARROW_DEBUG_GPURESET=1` | Enables live GPU context loss simulation via `F5` hotkey and `SIGUSR2` signal |
+| `--trace-surfacetree` | | `SPARROW_TRACE_SURFACETREE=1` | Enables interactive Surface Tree Inspector on `F10` keypress |
+| `--trace-perfetto[=file]` | | `SPARROW_TRACE_PERFETTO=file` | Starts in-process Perfetto trace recording *(compile-time: `./build.sh trace`)* |
+| `--renderdoc-capture[=N]` | | `RENDERDOC_CAPFILE=path` | Triggers RenderDoc frame capture at frame N or on `F7` *(compile-time: `./build.sh trace`)* |
+| `--triple-buffer` | `-3` | `SPARROW_BUFFERING=triple` | Forces Triple Buffering for maximum gaming throughput |
+| `--auto-buffer` | | `SPARROW_BUFFERING=auto` | Enables Dynamic Triple Buffering (adapts to GPU load) |
+| `--double-buffer` | `-2` | `SPARROW_BUFFERING=double` | Uses Double Buffering for minimum input latency (default) |
+| `--buffering=<mode>` | | `SPARROW_BUFFERING=<mode>` | Select buffering mode: `double`, `auto`, or `triple` |
+| `--fps` | `-F` | `SPARROW_SHOW_FPS=1` | Enables FPS and frame latency OSD at startup |
+| `--debug-damage` | `-D` | `SPARROW_DEBUG_DAMAGE=1` | Enables damage rectangle visualization at startup |
+| `--debug-protocol` | `-P` | `SPARROW_DEBUG_PROTOCOL=1` | Enables detailed Wayland protocol logging |
+| `--trace-gpu` | `-G` | `SPARROW_TRACE_GPU=1` | Enables OpenGL/EGL debug groups and texture labels *(compile-time: `./build.sh trace`)* |
+| `--trace` | | `SPARROW_TRACE=1` | Enables Perfetto / Ftrace `trace_marker` kernel logging *(compile-time: `./build.sh trace`)* |
+| `--inspect` | `-I` | `SPARROW_INSPECT=1` | Dumps surface tree at startup (also enables `F10` Surface Tree tracing) |
+| `--verbose` | `-v` | `SPARROW_DEBUG=1` | Enables verbose wlroots debug logging |
+| `--no-realtime` | `-n` | `SPARROW_NO_REALTIME=1` | Disables soft-realtime features |
+| `--vm-service[=port]` | | `SPARROW_VM_SERVICE=8181` | Enables Dart VM Service / DevTools / Flutter Driver (default: 8181) |
+
+<a id="performance"></a>
+
+## 🔬 GPU & Performance Tracing (Perfetto & RenderDoc)
+
+Sparrow includes an in-process, privilege-free profiling system using **Google Perfetto** and **RenderDoc**:
+
+- **Zero Overhead in Release**: All tracing logic is guarded by `#if defined(SPARROW_ENABLE_TRACE)`. In standard release builds (`./build.sh release`), tracing is completely compiled out with zero runtime overhead, zero binary bloat, and zero symbols.
+- **In-Process Tracing**: Does **not** require `sudo`, root privileges, or external kernel daemon setup.
+- **Visual Analysis**: Directly compatible with [https://ui.perfetto.dev](https://ui.perfetto.dev).
+
+### 1. Building with Tracing Enabled
+
+```bash
+./build.sh trace server
+```
+
+### 2. Automated Profiling Harness
+
+Run an automated profiling session with synthetic workloads and validation:
+
+```bash
+# Profile for 5 seconds and generate out/sparrow_profile.pftrace
+./tools/bot/profile_gpu.sh --duration=5
+
+# Headless mode (e.g. on CI / server without monitor)
+./tools/bot/profile_gpu.sh --duration=5 --headless
+
+# With custom Flutter app bundle
+./tools/bot/profile_gpu.sh --duration=10 --app=out/demo_app
+```
+
+### 3. Interactive Tracing & RenderDoc Capture
+
+```bash
+# Start Sparrow with Perfetto trace enabled
+./out/sparrow --trace-perfetto=out/sparrow.pftrace
+
+# While running:
+# - Press F6: Toggle Perfetto trace recording
+# - Press F7: Trigger an immediate RenderDoc frame capture
+```
+
+### 4. Viewing Traces
+
+1. Open **[https://ui.perfetto.dev](https://ui.perfetto.dev)** in Google Chrome or Chromium.
+2. Drag and drop `out/sparrow_profile.pftrace` into the browser window.
+3. Inspect tracks:
+   - `gpu`: Buffer imports, texture allocations, DMA-BUF bindings.
+   - `compositor`: Output render passes, VBlank commits, XDG commits.
+   - `render`: Flutter backing store allocation and layer presentation.
+   - `ipc`: JSON-RPC client requests and broadcasts.
+
+<a id="security"></a>
+
+## 🛡️ Sanitizers & Memory Safety Testing
+
+Sparrow includes native build modes and configurations for Sanitizers to validate memory safety, thread concurrency, and prevent regressions:
+
+### 1. AddressSanitizer & LeakSanitizer (ASan / LSan)
+
+> [!IMPORTANT]
+> **Kernel Configuration Prerequisites**:
+> Before running ASan, LSan, or MSan tests, execute these two commands on the host system:
+>
+> ```bash
+> sudo sysctl -w kernel.yama.ptrace_scope=0
+> sudo sysctl -w kernel.perf_event_paranoid=-1
+> ```
+>
+> Without these settings, Yama ptrace restrictions and perf event isolation will prevent LeakSanitizer and MemorySanitizer from inspecting thread memory/registers and reporting all errors.
+
+Detects buffer overflows, use-after-free, and memory leaks on shutdown (utilizes `lsan_suppressions.txt` to suppress external uninstrumented driver leaks):
+
+```bash
+./build.sh asan server
+LSAN_OPTIONS="suppressions=lsan_suppressions.txt" ASAN_OPTIONS="symbolize=1:detect_leaks=1:abort_on_error=0:allocator_may_return_null=1:fast_unwind_on_malloc=1" ./out/sparrow &> sparrow-asan.log
+```
+
+### 2. UndefinedBehaviorSanitizer (UBSan)
+
+Detects integer overflows, alignment issues, and null dereferences (utilizes `ubsan_suppressions.txt`):
+
+```bash
+./build.sh ubsan server
+UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:report_error_type=1:symbolize=1:suppressions=ubsan_suppressions.txt" ./out/sparrow &> sparrow-ubsan.log
+```
+
+### 3. ThreadSanitizer (TSan)
+
+Detects data races between Wayland event dispatching and Flutter rasterizer threads (utilizes `tsan_suppressions.txt` to filter uninstrumented GPU driver background compiler threads):
+
+```bash
+./build.sh tsan server
+TSAN_OPTIONS="report_signal_unsafe=0:symbolize=1:history_size=7:suppressions=tsan_suppressions.txt" ./out/sparrow &> sparrow-tsan.log
+```
+
+### 4. Memory Detector (Valgrind)
+
+Detects memory leaks, use-after-free, uninitialized memory accesses, and context lifecycle issues across all threads:
+
+```bash
+./build.sh valgrind server
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --verbose --log-file=sparrow-valgrind.log out/sparrow
+```
+
+For maximum stack trace depth and precision in deep Wayland/wlroots/Flutter call chains, you can add `--num-callers=40 --trace-children=no --keep-debuginfo=yes`:
+
+```bash
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --num-callers=40 --trace-children=no --keep-debuginfo=yes --verbose --log-file=sparrow-valgrind.log out/sparrow
+```
+
+<a id="roadmap"></a>
+
+## 🗺️ Next Steps & Roadmap
+
+- **`Multi-Monitor Support`**: Dynamic display attachment and per-output scale configurations (including refresh rates).
+- **`ARM64/AArch64 Support`**: allow sparrow to run on ARM64 (obviously Armel will not be supported...).
+- **`Vulkan Support`**: add support for Vulkan backend to Flutter.
+- **`Software Rendering`**: add support for software rendering to Flutter.
+- **`Simple Tiling`**: add support for a very basic tiling layout (up to 2 applications).
+- **`wlr_layer_shell_v1 (partial support)`**: Integration of background, toplevel, and overlay layer are scheduled (some features like exclusive zones might not be supported, in the near future, or not at all...).
+- **`animated screen rotation`**: add smooth, animate screen rotation based on accelerometer/gyroscope.
+- **`virtual keyboard`**: show up a virtual keyboard when the focus is on a text input field of an application in tablet mode.
+
+<a id="license"></a>
+
+## 📄 License
+
+This project is licensed under the GPL3 License. See [LICENSE](LICENSE) for details.
+
+<a id="acknowledgments"></a>
+
+## 🙏 Acknowledgments & Inspirations
+
+Sparrow is an independent Wayland compositor built with Flutter and wlroots. It draws architectural insights, design patterns, and inspiration from several open-source projects:
+
+- **[flutter_wlroots](https://github.com/FlutterWayland/flutter_wlroots)**: Initial proof-of-concept inspiration; foundational Dart bindings in `compositor_dart` were derived from this work ([License](doc/LICENSE_FLUTTER_WLROOTS)).
+- **[Zenith](https://github.com/roscale/zenith)**: Architectural inspiration for Flutter desktop shell and compositor integration ([License](doc/LICENSE_ZENITH)).
+- **[Wayfire](https://github.com/WayfireWM/wayfire)**: Compositor design patterns and C++ wlroots wrapping headers (`src/api/sparrow/nonstd/wlroots*.hpp`).
+- **[flutter-elinux](https://github.com/sony/flutter-elinux) & [ivi-homescreen](https://github.com/toyota-connected/ivi-homescreen)**: engine & Wayland integration approaches.
+- **[wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)**: Pluggable, composable Wayland compositor library powering the low-level compositor core.
+- **[niri](https://github.com/niri-wm/niri)**: Wayland compositor architectural inspiration.
+- **[Weston](https://gitlab.freedesktop.org/wayland/weston)**: Wayland reference implementation.
+- **[Sway](https://github.com/swaywm/sway)**: Wlroots reference implementation.
+
+- **[Android](https://source.android.com/) & [Chrome OS](https://opensource.google/projects/chromiumos)**: main inspiration...
+
+<a id="contact"></a>
+
+## 📞 Contact
+
+<arm-cade@proton.me>

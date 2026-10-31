@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://gitlab.freedesktop.org/emersion/wleird.git
+revision = HEAD
+depth = 1
