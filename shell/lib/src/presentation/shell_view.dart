@@ -972,141 +972,153 @@ class _ShellViewState extends State<ShellView> {
                                       );
 
                                   return Listener(
-                                  onPointerDown: (_) {
-                                    shellControllers.markSuperUsedAsModifier();
-                                  },
-                                  onPointerSignal: (_) {
-                                    shellControllers.markSuperUsedAsModifier();
-                                  },
-                                  onPointerMove: (event) {
-                                    if (event.kind == PointerDeviceKind.touch) {
-                                      return;
-                                    }
-                                    shellControllers.zoomController
-                                        .updateCursor(event.localPosition);
-                                  },
-                                  onPointerPanZoomStart: hasFullscreenTopOverlay
-                                      ? shellControllers
-                                            .handleOverlayPanZoomStart
-                                      : null,
-                                  onPointerPanZoomUpdate:
-                                      hasFullscreenTopOverlay
-                                      ? shellControllers
-                                            .handleOverlayPanZoomUpdate
-                                      : null,
-                                  onPointerPanZoomEnd: hasFullscreenTopOverlay
-                                      ? shellControllers.handleOverlayPanZoomEnd
-                                      : null,
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: <Widget>[
-                                      TickerMode(
-                                        enabled: isBackgroundVisible,
-                                        child: RepaintBoundary(
-                                          child: bgSurfaces.isNotEmpty
-                                              ? Stack(
-                                                  fit: StackFit.expand,
-                                                  children: <Widget>[
-                                                    const Background(),
-                                                    for (final bg in bgSurfaces)
-                                                      LayerSurfaceView(
-                                                        layerSurface: bg,
-                                                      ),
-                                                  ],
-                                                )
-                                              : const Background(),
-                                        ),
-                                      ),
-                                      if (bottomSurfaces.isNotEmpty)
-                                        RepaintBoundary(
-                                          child: PositionedLayerSurface(
-                                            layerSurfaces: bottomSurfaces,
+                                    onPointerDown: (_) {
+                                      shellControllers
+                                          .markSuperUsedAsModifier();
+                                    },
+                                    onPointerSignal: (_) {
+                                      shellControllers
+                                          .markSuperUsedAsModifier();
+                                    },
+                                    onPointerMove: (event) {
+                                      if (event.kind ==
+                                          PointerDeviceKind.touch) {
+                                        return;
+                                      }
+                                      shellControllers.zoomController
+                                          .updateCursor(event.localPosition);
+                                    },
+                                    onPointerPanZoomStart:
+                                        hasFullscreenTopOverlay
+                                        ? shellControllers
+                                              .handleOverlayPanZoomStart
+                                        : null,
+                                    onPointerPanZoomUpdate:
+                                        hasFullscreenTopOverlay
+                                        ? shellControllers
+                                              .handleOverlayPanZoomUpdate
+                                        : null,
+                                    onPointerPanZoomEnd: hasFullscreenTopOverlay
+                                        ? shellControllers
+                                              .handleOverlayPanZoomEnd
+                                        : null,
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: <Widget>[
+                                        TickerMode(
+                                          enabled: isBackgroundVisible,
+                                          child: RepaintBoundary(
+                                            child: bgSurfaces.isNotEmpty
+                                                ? Stack(
+                                                    fit: StackFit.expand,
+                                                    children: <Widget>[
+                                                      const Background(),
+                                                      for (final bg
+                                                          in bgSurfaces)
+                                                        LayerSurfaceView(
+                                                          layerSurface: bg,
+                                                        ),
+                                                    ],
+                                                  )
+                                                : const Background(),
                                           ),
                                         ),
-                                      if (effectiveOutput != null)
-                                        RepaintBoundary(
-                                          child: IgnorePointer(
-                                            ignoring: surfaces.isEmpty,
-                                            child: ShellPageView(
-                                              surfaces: surfaces,
-                                            handlePageViewChanged: (index) =>
-                                                _handlePageViewChanged(
-                                                  controllers: shellControllers,
-                                                  shellBloc: shellBloc,
-                                                  surfaces: surfaces,
-                                                  index: index,
-                                                ),
-                                            toggleOverview: ({index}) =>
-                                                _toggleOverview(
-                                                  controllers: shellControllers,
-                                                  shellBloc: shellBloc,
-                                                  surfaces: surfaces,
-                                                  index: index,
-                                                ),
-                                            closeOverview:
-                                                (s, {center = true}) =>
-                                                    _closeOverview(
+                                        if (bottomSurfaces.isNotEmpty)
+                                          RepaintBoundary(
+                                            child: PositionedLayerSurface(
+                                              layerSurfaces: bottomSurfaces,
+                                            ),
+                                          ),
+                                        if (effectiveOutput != null)
+                                          RepaintBoundary(
+                                            child: IgnorePointer(
+                                              ignoring: surfaces.isEmpty,
+                                              child: ShellPageView(
+                                                surfaces: surfaces,
+                                                handlePageViewChanged:
+                                                    (index) =>
+                                                        _handlePageViewChanged(
+                                                          controllers:
+                                                              shellControllers,
+                                                          shellBloc: shellBloc,
+                                                          surfaces: surfaces,
+                                                          index: index,
+                                                        ),
+                                                toggleOverview: ({index}) =>
+                                                    _toggleOverview(
+                                                      controllers:
+                                                          shellControllers,
+                                                      shellBloc: shellBloc,
+                                                      surfaces: surfaces,
+                                                      index: index,
+                                                    ),
+                                                closeOverview:
+                                                    (s, {center = true}) =>
+                                                        _closeOverview(
+                                                          controllers:
+                                                              shellControllers,
+                                                          shellBloc: shellBloc,
+                                                          surfaces: surfaces,
+                                                          s: s,
+                                                          center: center,
+                                                        ),
+                                                openOverview: (s) =>
+                                                    _openOverview(
                                                       controllers:
                                                           shellControllers,
                                                       shellBloc: shellBloc,
                                                       surfaces: surfaces,
                                                       s: s,
-                                                      center: center,
                                                     ),
-                                            openOverview: (s) => _openOverview(
-                                              controllers: shellControllers,
-                                              shellBloc: shellBloc,
-                                              surfaces: surfaces,
-                                              s: s,
+                                                pageController: shellControllers
+                                                    .pageController,
+                                                animationController:
+                                                    shellControllers
+                                                        .overviewController,
+                                                gap: gap,
+                                                fraction: fraction,
+                                                radius: radius,
+                                                output: effectiveOutput,
+                                              ),
                                             ),
+                                          ),
+                                        RepaintBoundary(
+                                          child: CompositorController(
                                             pageController:
                                                 shellControllers.pageController,
-                                            animationController:
-                                                shellControllers
-                                                    .overviewController,
-                                            gap: gap,
-                                            fraction: fraction,
-                                            radius: radius,
-                                            output: effectiveOutput,
-                                          ),
-                                          ),
-                                        ),
-                                      RepaintBoundary(
-                                        child: CompositorController(
-                                          pageController:
-                                              shellControllers.pageController,
-                                          controllers: shellControllers,
-                                          isFullscreen: isFullscreen,
-                                          isOverview: isOverview,
-                                          hasSurfaces: surfaces.isNotEmpty,
-                                          toggleOverview: () => _toggleOverview(
                                             controllers: shellControllers,
-                                            shellBloc: shellBloc,
-                                            surfaces: surfaces,
+                                            isFullscreen: isFullscreen,
+                                            isOverview: isOverview,
+                                            hasSurfaces: surfaces.isNotEmpty,
+                                            toggleOverview: () =>
+                                                _toggleOverview(
+                                                  controllers: shellControllers,
+                                                  shellBloc: shellBloc,
+                                                  surfaces: surfaces,
+                                                ),
+                                            onUpdateCurrentPageIndex: (index) =>
+                                                _updateCurrentPageIndex(
+                                                  shellControllers,
+                                                  shellBloc,
+                                                  surfaces,
+                                                  index,
+                                                ),
                                           ),
-                                          onUpdateCurrentPageIndex: (index) =>
-                                              _updateCurrentPageIndex(
-                                                shellControllers,
-                                                shellBloc,
-                                                surfaces,
-                                                index,
-                                              ),
                                         ),
-                                      ),
-                                      if (overlaySurfaces.isNotEmpty)
-                                        RepaintBoundary(
-                                          child: PositionedLayerSurface(
-                                            layerSurfaces: overlaySurfaces,
+                                        if (overlaySurfaces.isNotEmpty)
+                                          RepaintBoundary(
+                                            child: PositionedLayerSurface(
+                                              layerSurfaces: overlaySurfaces,
+                                            ),
+                                          ),
+                                        Positioned.fill(
+                                          child: ScreenZoomOverlay(
+                                            controller:
+                                                shellControllers.zoomController,
+                                            size: Size(maxw, maxh),
                                           ),
                                         ),
-                                      Positioned.fill(
-                                        child: ScreenZoomOverlay(
-                                          controller:
-                                              shellControllers.zoomController,
-                                          size: Size(maxw, maxh),
-                                        ),
-                                      ),
-                                    ],
+                                      ],
                                     ),
                                   );
                                 },

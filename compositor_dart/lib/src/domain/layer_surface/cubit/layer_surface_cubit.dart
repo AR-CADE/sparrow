@@ -68,4 +68,3 @@ class LayerSurfaceCubit extends Cubit<LayerSurfaceState> {
     return super.close();
   }
 }
-

@@ -654,14 +654,15 @@ static void censor_shm_pixels(struct sparrow_screencopy_frame_v1 *frame,
             for (int i = 0; i < nrects; ++i)
             {
                 struct wlr_box r_box = {
-                    .x      = rects[i].x1,
-                    .y      = rects[i].y1,
-                    .width  = rects[i].x2 - rects[i].x1,
+                    .x     = rects[i].x1,
+                    .y     = rects[i].y1,
+                    .width = rects[i].x2 - rects[i].x1,
                     .height = rects[i].y2 - rects[i].y1,
                 };
                 censor_box_fn(r_box, 0);
             }
         }
+
         pixman_region32_fini(&censor_region);
     }
 
@@ -681,13 +682,13 @@ static void censor_shm_pixels(struct sparrow_screencopy_frame_v1 *frame,
 static bool frame_shm_copy(struct sparrow_screencopy_frame_v1 *frame,
     struct wlr_buffer *src_buffer)
 {
-    struct wlr_output *output = frame->output;
+    struct wlr_output *output     = frame->output;
     struct wlr_renderer *renderer = output->renderer;
     assert(renderer);
 
     void *data = nullptr;
     uint32_t format = 0;
-    size_t stride = 0;
+    size_t stride   = 0;
     if (!wlr_buffer_begin_data_ptr_access(frame->buffer,
         WLR_BUFFER_DATA_PTR_ACCESS_WRITE, &data,
         &format, &stride))
@@ -732,9 +733,9 @@ static bool frame_shm_copy(struct sparrow_screencopy_frame_v1 *frame,
 
     {
         struct wlr_texture_read_pixels_options read_opts = {
-            .data = data,
-            .format = format,
-            .stride = static_cast<uint32_t>(stride),
+            .data    = data,
+            .format  = format,
+            .stride  = static_cast<uint32_t>(stride),
             .src_box = frame->box,
         };
         ok = wlr_texture_read_pixels(texture, &read_opts);
@@ -786,7 +787,7 @@ bool sparrow_compute_layer_surface_censor_region(Core *instance,
             }
 
             struct wlr_box v_box = {};
-            int v_corner_radius = 0;
+            int v_corner_radius  = 0;
             if (sparrow_get_view_buffer_box(instance, v, output, &v_box,
                 &v_corner_radius))
             {
@@ -873,8 +874,8 @@ void sparrow_censor_output_render_pass(struct wlr_output *output,
         struct wlr_render_rect_options rect_opts = {
             .box =
             {
-                .x = 0,
-                .y = 0,
+                .x     = 0,
+                .y     = 0,
                 .width = capture_box->width,
                 .height = capture_box->height,
             },
@@ -914,13 +915,13 @@ void sparrow_censor_output_render_pass(struct wlr_output *output,
         if (dst_x < 0)
         {
             dst_w += dst_x;
-            dst_x = 0;
+            dst_x  = 0;
         }
 
         if (dst_y < 0)
         {
             dst_h += dst_y;
-            dst_y = 0;
+            dst_y  = 0;
         }
 
         if (dst_x + dst_w > capture_box->width)
@@ -952,8 +953,8 @@ void sparrow_censor_output_render_pass(struct wlr_output *output,
         struct wlr_render_rect_options rect_opts = {
             .box =
             {
-                .x = dst_x,
-                .y = dst_y,
+                .x     = dst_x,
+                .y     = dst_y,
                 .width = dst_w,
                 .height = dst_h,
             },
@@ -1008,8 +1009,8 @@ void sparrow_censor_output_render_pass(struct wlr_output *output,
             for (int i = 0; i < nrects; ++i)
             {
                 struct wlr_box r_box = {
-                    .x = rects[i].x1,
-                    .y = rects[i].y1,
+                    .x     = rects[i].x1,
+                    .y     = rects[i].y1,
                     .width = rects[i].x2 - rects[i].x1,
                     .height = rects[i].y2 - rects[i].y1,
                 };
@@ -1037,7 +1038,7 @@ static bool frame_dma_copy(struct sparrow_screencopy_frame_v1 *frame,
     struct wlr_buffer *src_buffer)
 {
     struct wlr_buffer *dst_buffer = frame->buffer;
-    struct wlr_output *output = frame->output;
+    struct wlr_output *output     = frame->output;
     struct wlr_renderer *renderer = output->renderer;
     assert(renderer);
 
@@ -1063,8 +1064,8 @@ static bool frame_dma_copy(struct sparrow_screencopy_frame_v1 *frame,
         struct wlr_render_rect_options bg_opts = {
             .box =
             {
-                .x = 0,
-                .y = 0,
+                .x     = 0,
+                .y     = 0,
                 .width = dst_buffer->width,
                 .height = dst_buffer->height,
             },
@@ -1078,15 +1079,15 @@ static bool frame_dma_copy(struct sparrow_screencopy_frame_v1 *frame,
             .texture = src_tex,
             .src_box =
             {
-                .x = (double)frame->box.x,
-                .y = (double)frame->box.y,
+                .x     = (double)frame->box.x,
+                .y     = (double)frame->box.y,
                 .width = (double)frame->box.width,
                 .height = (double)frame->box.height,
             },
             .dst_box =
             {
-                .x = 0,
-                .y = 0,
+                .x     = 0,
+                .y     = 0,
                 .width = dst_buffer->width,
                 .height = dst_buffer->height,
             },
@@ -1251,7 +1252,7 @@ static void frame_handle_copy(struct wl_client *wl_client,
     struct wlr_dmabuf_attributes dmabuf = {};
     void *data = nullptr;
     uint32_t format = 0;
-    size_t stride = 0;
+    size_t stride   = 0;
 
     if (wlr_buffer_get_dmabuf(buffer, &dmabuf))
     {
@@ -1292,7 +1293,7 @@ static void frame_handle_copy(struct wl_client *wl_client,
         return;
     }
 
-    frame->buffer = buffer;
+    frame->buffer     = buffer;
     frame->buffer_cap = cap;
 
     wl_signal_add(&output->events.commit, &frame->output_commit);
@@ -1432,7 +1433,7 @@ static void capture_output(struct wl_client *wl_client,
         struct wlr_box buffer_box = {};
         if (box == nullptr)
         {
-            buffer_box.width = output->width;
+            buffer_box.width  = output->width;
             buffer_box.height = output->height;
         } else
         {
@@ -1441,8 +1442,8 @@ static void capture_output(struct wl_client *wl_client,
             buffer_box = *box;
             wlr_box_transform(&buffer_box, &buffer_box,
                 wlr_output_transform_invert(output->transform), ow, oh);
-            buffer_box.x = (int)lround(buffer_box.x * output->scale);
-            buffer_box.y = (int)lround(buffer_box.y * output->scale);
+            buffer_box.x     = (int)lround(buffer_box.x * output->scale);
+            buffer_box.y     = (int)lround(buffer_box.y * output->scale);
             buffer_box.width = (int)lround(buffer_box.width * output->scale);
             buffer_box.height = (int)lround(buffer_box.height * output->scale);
         }
@@ -1500,8 +1501,8 @@ static void manager_handle_capture_output_region(
     struct wlr_output *output = wlr_output_from_resource(output_resource);
 
     struct wlr_box box = {
-        .x = x,
-        .y = y,
+        .x     = x,
+        .y     = y,
         .width = width,
         .height = height,
     };
@@ -1535,7 +1536,7 @@ static void manager_bind(struct wl_client *wl_client, void *data,
         return;
     }
 
-    client->ref = 1;
+    client->ref     = 1;
     client->manager = manager;
     wl_list_init(&client->damages);
 

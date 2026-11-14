@@ -1342,53 +1342,54 @@ void main() {
       },
     );
 
-    testWidgets(
-      'ShellPageView ignores pointers when surfaces are empty '
-      'so bottomSurfaces receive pointer and touch hit tests',
-      (tester) async {
-        const bottomLayerSurface = LayerSurface(
-          handle: 42,
-          textureId: 1,
-          layer: 1,
-          anchor: 15,
-          width: 1920,
-          height: 1080,
-          outputId: 1,
-          scope: 'gtk-layer-shell',
-        );
+    testWidgets('ShellPageView ignores pointers when surfaces are empty '
+        'so bottomSurfaces receive pointer and touch hit tests', (
+      tester,
+    ) async {
+      const bottomLayerSurface = LayerSurface(
+        handle: 42,
+        textureId: 1,
+        layer: 1,
+        anchor: 15,
+        width: 1920,
+        height: 1080,
+        outputId: 1,
+        scope: 'gtk-layer-shell',
+      );
 
-        const compState = CompositorState(
-          outputs: {1: testOutput},
-          layerSurfaces: {42: bottomLayerSurface},
-        );
-        when(() => compBloc.state).thenReturn(compState);
-        whenListen(
-          compBloc,
-          compStreamController.stream,
-          initialState: compState,
-        );
+      const compState = CompositorState(
+        outputs: {1: testOutput},
+        layerSurfaces: {42: bottomLayerSurface},
+      );
+      when(() => compBloc.state).thenReturn(compState);
+      whenListen(
+        compBloc,
+        compStreamController.stream,
+        initialState: compState,
+      );
 
-        await pumpShellView(tester);
-        await tester.pump();
+      await pumpShellView(tester);
+      await tester.pump();
 
-        final ignorePointer = tester.widget<IgnorePointer>(
-          find.ancestor(
-            of: find.byType(ShellPageView),
-            matching: find.byType(IgnorePointer),
-          ).first,
-        );
-        expect(ignorePointer.ignoring, isTrue);
+      final ignorePointer = tester.widget<IgnorePointer>(
+        find
+            .ancestor(
+              of: find.byType(ShellPageView),
+              matching: find.byType(IgnorePointer),
+            )
+            .first,
+      );
+      expect(ignorePointer.ignoring, isTrue);
 
-        final center = tester.getCenter(find.byType(ShellView));
-        final hitResult = tester.hitTestOnBinding(center);
-        final layerRenderObject = tester.renderObject(
-          find.byType(LayerSurfaceView),
-        );
-        expect(
-          hitResult.path.any((entry) => entry.target == layerRenderObject),
-          isTrue,
-        );
-      },
-    );
+      final center = tester.getCenter(find.byType(ShellView));
+      final hitResult = tester.hitTestOnBinding(center);
+      final layerRenderObject = tester.renderObject(
+        find.byType(LayerSurfaceView),
+      );
+      expect(
+        hitResult.path.any((entry) => entry.target == layerRenderObject),
+        isTrue,
+      );
+    });
   });
 }

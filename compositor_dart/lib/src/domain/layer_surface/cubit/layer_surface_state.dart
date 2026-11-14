@@ -18,4 +18,3 @@ class LayerSurfaceState extends Equatable {
   @override
   List<Object?> get props => [subsurfaces];
 }
-
