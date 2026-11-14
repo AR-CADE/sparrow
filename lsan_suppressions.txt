@@ -1,0 +1,16 @@
+# LeakSanitizer (LSan / ASan) suppression file for Sparrow
+# Suppresses false-positive memory leaks from uninstrumented external system libraries
+# (Mesa GPU drivers, LLVM shader compiler, FontConfig, Flutter engine)
+
+leak:libgallium
+leak:libLLVM
+leak:libEGL_mesa
+leak:libfontconfig
+leak:libflutter_engine
+leak:libdrm
+leak:libglapi
+leak:libxkbcommon
+leak:libgbm
+leak:libvulkan_radeon
+leak:libvulkan
+leak:libVkLayer_
