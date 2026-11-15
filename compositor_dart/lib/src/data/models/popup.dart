@@ -18,12 +18,20 @@ class Popup extends Equatable {
     int? height = 0,
     int? outputId = 0,
     double? outputScale = 1.0,
+    bool? acceptsInput = true,
+    int? inputX = 0,
+    int? inputY = 0,
+    this.inputWidth,
+    this.inputHeight,
   }) : x = x ?? 0,
        y = y ?? 0,
        width = width ?? 0,
        height = height ?? 0,
        outputId = outputId ?? 0,
-       outputScale = outputScale ?? 1.0;
+       outputScale = outputScale ?? 1.0,
+       acceptsInput = acceptsInput ?? true,
+       inputX = inputX ?? 0,
+       inputY = inputY ?? 0;
 
   /// Creates a [Popup] decoded from a JSON map.
   factory fromJson(Map<String, dynamic> json) => _$PopupFromJson(json);
@@ -63,6 +71,28 @@ class Popup extends Equatable {
   @JsonKey(name: 'output_scale')
   final double outputScale;
 
+  /// Whether this popup surface (or any mapped subsurface) accepts pointer
+  /// input.
+  @JsonKey(name: 'accepts_input', defaultValue: true)
+  final bool acceptsInput;
+
+  /// Horizontal offset of the active Wayland input region within the texture.
+  @JsonKey(name: 'input_x', defaultValue: 0)
+  final int inputX;
+
+  /// Vertical offset of the active Wayland input region within the texture.
+  @JsonKey(name: 'input_y', defaultValue: 0)
+  final int inputY;
+
+  /// Width of the active Wayland input region (`null` defaults to full width).
+  @JsonKey(name: 'input_width')
+  final int? inputWidth;
+
+  /// Height of the active Wayland input region (`null` defaults to full
+  /// height).
+  @JsonKey(name: 'input_height')
+  final int? inputHeight;
+
   /// Converts this popup instance to a JSON map.
   Map<String, dynamic> toJson() => _$PopupToJson(this);
 
@@ -81,6 +111,11 @@ class Popup extends Equatable {
     int? y,
     int? outputId,
     double? outputScale,
+    bool? acceptsInput,
+    int? inputX,
+    int? inputY,
+    int? inputWidth,
+    int? inputHeight,
   }) {
     return Popup(
       handle: handle ?? this.handle,
@@ -92,6 +127,11 @@ class Popup extends Equatable {
       y: y ?? this.y,
       outputId: outputId ?? this.outputId,
       outputScale: outputScale ?? this.outputScale,
+      acceptsInput: acceptsInput ?? this.acceptsInput,
+      inputX: inputX ?? this.inputX,
+      inputY: inputY ?? this.inputY,
+      inputWidth: inputWidth ?? this.inputWidth,
+      inputHeight: inputHeight ?? this.inputHeight,
     );
   }
 
@@ -106,5 +146,10 @@ class Popup extends Equatable {
     height,
     outputId,
     outputScale,
+    acceptsInput,
+    inputX,
+    inputY,
+    inputWidth,
+    inputHeight,
   ];
 }

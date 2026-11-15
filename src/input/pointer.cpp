@@ -101,10 +101,38 @@ SparrowView *sparrow_get_direct_input_view(Core *instance, double cursor_x,
         return nullptr;
     }
 
-    // If popups or menus are active, direct mode must yield to Flutter compositing
+    // Yield direct mode to Flutter when an interactive popup has a grab or accepts input at cursor
     if (instance->popups && !instance->popups->empty())
     {
-        return nullptr;
+        for (const auto &[handle, value] : *instance->popups)
+        {
+            auto *popup = static_cast<SparrowPopup*>(value);
+            if (popup && popup->xdg_surface && popup->xdg_surface->surface &&
+                popup->xdg_surface->surface->mapped &&
+                sparrow_popup_accepts_input(popup))
+            {
+                if (popup->xdg_popup && (popup->xdg_popup->seat != nullptr))
+                {
+                    return nullptr;
+                }
+
+                // Non-grabbing interactive popup: only yield if cursor falls inside its input box
+                if (popup->parent_view && popup->parent_view->has_flutter_scene_box)
+                {
+                    const auto & pb = popup->parent_view->flutter_scene_box;
+                    const double px = pb.x + popup->x + popup->input_x;
+                    const double py = pb.y + popup->y + popup->input_y;
+                    if ((cursor_x >= px) && (cursor_x < px + popup->input_width) &&
+                        (cursor_y >= py) && (cursor_y < py + popup->input_height))
+                    {
+                        return nullptr;
+                    }
+                } else
+                {
+                    return nullptr;
+                }
+            }
+        }
     }
 
     // If cursor is over any mapped layer surface on TOP or OVERLAY that accepts input, yield to Flutter

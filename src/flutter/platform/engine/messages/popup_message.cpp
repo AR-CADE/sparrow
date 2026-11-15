@@ -104,20 +104,26 @@ void send_popup_map(SparrowPopup *popup)
     popup->y     = popup->pos_y - win_geo.y;
     popup->width = width;
     popup->height = height;
+    popup->accepts_input = sparrow_popup_get_input_bounds(
+        popup, &popup->input_x, &popup->input_y, &popup->input_width,
+        &popup->input_height);
 
     wlr_log(
         WLR_INFO,
         "Popup map: handle=%d, parent_view=%d, is_child=%i (parent_popup=%d), "
         "flutter_pos=(%d,%d), flutter_size=%dx%d, "
         "surf=%dx%d (has_buf=%d), content=%dx%d (is_sub=%d), "
-        "win_geo=(%d,%d,%dx%d), pos_geo=(%d,%d,%dx%d)",
+        "win_geo=(%d,%d,%dx%d), pos_geo=(%d,%d,%dx%d), "
+        "accepts_input=%d, input_box=(%d,%d,%dx%d), grab=%d",
         popup->handle, popup->parent_view->handle, popup->parent_popup != nullptr,
         popup->parent_popup ? popup->parent_popup->handle : 0, popup->x, popup->y,
         popup->width, popup->height, surf->current.width, surf->current.height,
         wlr_surface_has_buffer(surf), content_surface->current.width,
         content_surface->current.height, content_surface != surf, win_geo.x,
         win_geo.y, win_geo.width, win_geo.height, pos_geo.x, pos_geo.y,
-        pos_geo.width, pos_geo.height);
+        pos_geo.width, pos_geo.height, (int)popup->accepts_input, popup->input_x,
+        popup->input_y, popup->input_width, popup->input_height,
+        (int)(popup->xdg_popup && popup->xdg_popup->seat != nullptr));
 
     auto map = flutter::EncodableMap{
         {flutter::EncodableValue("handle"),
@@ -139,6 +145,16 @@ void send_popup_map(SparrowPopup *popup)
                 (int64_t)(popup->current_output ? popup->current_output->id : 0))},
         {flutter::EncodableValue("output_scale"),
             flutter::EncodableValue(popup->output_scale)},
+        {flutter::EncodableValue("accepts_input"),
+            flutter::EncodableValue(popup->accepts_input)},
+        {flutter::EncodableValue("input_x"),
+            flutter::EncodableValue((int64_t)popup->input_x)},
+        {flutter::EncodableValue("input_y"),
+            flutter::EncodableValue((int64_t)popup->input_y)},
+        {flutter::EncodableValue("input_width"),
+            flutter::EncodableValue((int64_t)popup->input_width)},
+        {flutter::EncodableValue("input_height"),
+            flutter::EncodableValue((int64_t)popup->input_height)},
     };
 
     instance->pigeon_flutter_api->PopupMap(

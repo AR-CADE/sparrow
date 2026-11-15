@@ -16,7 +16,25 @@ void main() {
     );
 
     test('props are correct', () {
-      expect(popup.props, equals([50, 50, 10, 100, 200, 300, 400, 1, 1.5]));
+      expect(
+        popup.props,
+        equals([
+          50,
+          50,
+          10,
+          100,
+          200,
+          300,
+          400,
+          1,
+          1.5,
+          true,
+          0,
+          0,
+          null,
+          null,
+        ]),
+      );
     });
 
     test('equality works', () {

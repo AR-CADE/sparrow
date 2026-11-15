@@ -4,9 +4,14 @@ import 'package:compositor_dart/src/presentation/popup_platform_view_controller.
 import 'package:material_ui/material_ui.dart'
     show
         BuildContext,
+        Clip,
         FilterQuality,
         HitTestBehavior,
+        IgnorePointer,
         Listener,
+        Positioned,
+        SizedBox,
+        Stack,
         StatelessWidget,
         Texture,
         Widget;
@@ -38,14 +43,27 @@ class PopupView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final texture = Texture(
+      textureId: popup.textureId,
+      filterQuality: filterQuality,
+    );
+    if (!popup.acceptsInput) {
+      return IgnorePointer(child: texture);
+    }
+
+    final inW = (popup.inputWidth ?? popup.width).toDouble() * scaleX;
+    final inH = (popup.inputHeight ?? popup.height).toDouble() * scaleY;
+    if ((popup.inputWidth != null && inW <= 0) ||
+        (popup.inputHeight != null && inH <= 0)) {
+      return IgnorePointer(child: texture);
+    }
+
     final controller = PopupPlatformViewController(
       popup: popup,
       scaleX: scaleX,
       scaleY: scaleY,
     );
-    // Use Listener to capture all pointer events and forward to wlroots
-    // This maintains Flutter-first architecture while enabling popup input
-    return Listener(
+    final listener = Listener(
       onPointerDown: controller.dispatchPointerEvent,
       onPointerMove: controller.dispatchPointerEvent,
       onPointerUp: controller.dispatchPointerEvent,
@@ -56,7 +74,40 @@ class PopupView extends StatelessWidget {
       onPointerPanZoomUpdate: controller.dispatchPointerEvent,
       onPointerPanZoomEnd: controller.dispatchPointerEvent,
       behavior: HitTestBehavior.opaque,
-      child: Texture(textureId: popup.textureId, filterQuality: filterQuality),
+      child: const SizedBox.expand(),
+    );
+
+    if (popup.inputX == 0 &&
+        popup.inputY == 0 &&
+        (popup.inputWidth == null || popup.inputWidth == popup.width) &&
+        (popup.inputHeight == null || popup.inputHeight == popup.height)) {
+      return Listener(
+        onPointerDown: controller.dispatchPointerEvent,
+        onPointerMove: controller.dispatchPointerEvent,
+        onPointerUp: controller.dispatchPointerEvent,
+        onPointerHover: controller.dispatchPointerEvent,
+        onPointerCancel: controller.dispatchPointerEvent,
+        onPointerSignal: controller.dispatchPointerEvent,
+        onPointerPanZoomStart: controller.dispatchPointerEvent,
+        onPointerPanZoomUpdate: controller.dispatchPointerEvent,
+        onPointerPanZoomEnd: controller.dispatchPointerEvent,
+        behavior: HitTestBehavior.opaque,
+        child: texture,
+      );
+    }
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IgnorePointer(child: texture),
+        Positioned(
+          left: popup.inputX.toDouble() * scaleX,
+          top: popup.inputY.toDouble() * scaleY,
+          width: inW > 0 ? inW : null,
+          height: inH > 0 ? inH : null,
+          child: listener,
+        ),
+      ],
     );
   }
 }

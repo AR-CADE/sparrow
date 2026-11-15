@@ -6,7 +6,7 @@ import 'package:compositor_dart/src/data/repositories/compositor/compositor_repo
     show CompositorRepository;
 import 'package:compositor_dart/src/presentation/pointer_event_encoder.dart'
     show PointerEventEncoder;
-import 'package:material_ui/material_ui.dart' show PointerEvent, Size;
+import 'package:material_ui/material_ui.dart' show Offset, PointerEvent, Size;
 
 /// Controller for dispatching pointer events from PopupView to wlroots.
 ///
@@ -40,6 +40,12 @@ class PopupPlatformViewController with PointerEventEncoder {
       handle: popup.handle,
       event: event,
       widgetSize: size,
+      coordTransform: (popup.inputX != 0 || popup.inputY != 0)
+          ? (pos) => Offset(
+              pos.dx + popup.inputX.toDouble() * scaleX,
+              pos.dy + popup.inputY.toDouble() * scaleY,
+            )
+          : null,
     );
 
     await CompositorRepository().platform.popupPointerEvent(message);

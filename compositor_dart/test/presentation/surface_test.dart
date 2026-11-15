@@ -4,7 +4,16 @@ import 'package:compositor_dart/compositor_dart.dart';
 import 'package:flutter_bloc/flutter_bloc.dart' show BlocProvider;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart'
-    show Center, ColoredBox, Directionality, SizedBox, TextDirection;
+    show
+        Center,
+        ColoredBox,
+        Directionality,
+        GestureDetector,
+        HitTestBehavior,
+        IgnorePointer,
+        SizedBox,
+        Stack,
+        TextDirection;
 import 'package:mocktail/mocktail.dart';
 import 'package:rxdart/subjects.dart';
 
@@ -293,5 +302,92 @@ void main() {
 
       expect(find.byType(SurfaceTree), findsOneWidget);
     });
+
+    testWidgets('PopupView ignores pointer events when acceptsInput is false', (
+      tester,
+    ) async {
+      var tappedUnderlying = false;
+      const tooltipPopup = Popup(
+        handle: 10,
+        textureId: 200010,
+        parentHandle: 2,
+        width: 100,
+        height: 40,
+        acceptsInput: false,
+      );
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Stack(
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => tappedUnderlying = true,
+                child: const SizedBox(width: 200, height: 200),
+              ),
+              const SizedBox(
+                width: 100,
+                height: 40,
+                child: PopupView(popup: tooltipPopup),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      expect(
+        find.descendant(
+          of: find.byType(PopupView),
+          matching: find.byType(IgnorePointer),
+        ),
+        findsOneWidget,
+      );
+      await tester.tapAt(const Offset(50, 20));
+      expect(tappedUnderlying, isTrue);
+    });
+
+    testWidgets(
+      'PopupView ignores pointer events in transparent CSD shadow region',
+      (tester) async {
+        var tappedUnderlying = false;
+        const csdPopup = Popup(
+          handle: 11,
+          textureId: 200011,
+          parentHandle: 2,
+          width: 263,
+          height: 121,
+          inputX: 45,
+          inputY: 45,
+          inputWidth: 173,
+          inputHeight: 31,
+        );
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Stack(
+              children: [
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => tappedUnderlying = true,
+                  child: const SizedBox(width: 300, height: 200),
+                ),
+                const SizedBox(
+                  width: 263,
+                  height: 121,
+                  child: PopupView(popup: csdPopup),
+                ),
+              ],
+            ),
+          ),
+        );
+
+        // Tap inside top CSD shadow region (y=20 < inputY=45): must pass
+        // through to the underlying surface.
+        await tester.tapAt(const Offset(130, 20));
+        expect(tappedUnderlying, isTrue);
+      },
+    );
   });
 }

@@ -587,18 +587,30 @@ static void popup_handle_commit(struct wl_listener *listener, void *data)
         const int new_height = content_surface->current.height > 0 ?
             content_surface->current.height :
             pos_geo.height;
+        int new_in_x = 0;
+        int new_in_y = 0;
+        int new_in_w = 0;
+        int new_in_h = 0;
+        const bool new_accepts_input = sparrow_popup_get_input_bounds(
+            popup, &new_in_x, &new_in_y, &new_in_w, &new_in_h);
 
-        // If dimensions or position changed, notify Flutter with updated geometry
-        if ((new_width > 0) && (new_height > 0) &&
-            ((new_width != popup->width) || (new_height != popup->height) ||
-             (new_x != popup->x) || (new_y != popup->y)))
+        // If dimensions, position, or input bounds changed, notify Flutter
+        if (((new_width > 0) && (new_height > 0) &&
+             ((new_width != popup->width) || (new_height != popup->height) ||
+              (new_x != popup->x) || (new_y != popup->y))) ||
+            (new_accepts_input != popup->accepts_input) ||
+            (new_in_x != popup->input_x) || (new_in_y != popup->input_y) ||
+            (new_in_w != popup->input_width) || (new_in_h != popup->input_height))
         {
             wlr_log(WLR_INFO,
-                "Popup %d geometry/content changed: pos=(%d,%d)->(%d,%d), "
-                "size=%dx%d->%dx%d, re-sending popup_map",
+                "Popup %d geometry/content/input changed: pos=(%d,%d)->(%d,%d), "
+                "size=%dx%d->%dx%d, input=%d(%d,%d,%dx%d)->%d(%d,%d,%dx%d), re-sending popup_map",
                 popup->handle, popup->x, popup->y, new_x, new_y, popup->width,
-                popup->height, new_width, new_height);
-            send_popup_map(popup); // This will update popup->x/y/width/height and
+                popup->height, new_width, new_height, (int)popup->accepts_input,
+                popup->input_x, popup->input_y, popup->input_width,
+                popup->input_height, (int)new_accepts_input, new_in_x, new_in_y,
+                new_in_w, new_in_h);
+            send_popup_map(popup); // This will update popup geometry/input and
                                    // send to Flutter
 
             if (instance && instance->popups)
@@ -856,4 +868,128 @@ void sparrow_focus_popup(SparrowPopup *popup)
         wlr_xdg_toplevel_set_activated(popup->parent_view->toplevel, true);
         popup->parent_view->activated = true;
     }
+}
+
+bool sparrow_popup_get_input_bounds(SparrowPopup *popup, int *out_x, int *out_y,
+    int *out_width, int *out_height)
+{
+    auto reset_out = [&] ()
+    {
+        if (out_x)
+        {
+            *out_x = 0;
+        }
+
+        if (out_y)
+        {
+            *out_y = 0;
+        }
+
+        if (out_width)
+        {
+            *out_width = 0;
+        }
+
+        if (out_height)
+        {
+            *out_height = 0;
+        }
+    };
+
+    if (!popup || !popup->xdg_surface || !popup->xdg_surface->surface)
+    {
+        reset_out();
+        return false;
+    }
+
+    struct wlr_surface *surf = popup->xdg_surface->surface;
+    pixman_region32_t total;
+    pixman_region32_init(&total);
+
+    if (pixman_region32_not_empty(&surf->input_region))
+    {
+        pixman_region32_union(&total, &total, &surf->input_region);
+    }
+
+    struct wlr_subsurface *sub = nullptr;
+    wl_list_for_each(sub, &surf->current.subsurfaces_below, current.link)
+    {
+        if (sub->surface && sub->surface->mapped &&
+            pixman_region32_not_empty(&sub->surface->input_region))
+        {
+            pixman_region32_t sub_reg;
+            pixman_region32_init(&sub_reg);
+            pixman_region32_copy(&sub_reg, &sub->surface->input_region);
+            pixman_region32_translate(&sub_reg, sub->current.x, sub->current.y);
+            pixman_region32_union(&total, &total, &sub_reg);
+            pixman_region32_fini(&sub_reg);
+        }
+    }
+    wl_list_for_each(sub, &surf->current.subsurfaces_above, current.link)
+    {
+        if (sub->surface && sub->surface->mapped &&
+            pixman_region32_not_empty(&sub->surface->input_region))
+        {
+            pixman_region32_t sub_reg;
+            pixman_region32_init(&sub_reg);
+            pixman_region32_copy(&sub_reg, &sub->surface->input_region);
+            pixman_region32_translate(&sub_reg, sub->current.x, sub->current.y);
+            pixman_region32_union(&total, &total, &sub_reg);
+            pixman_region32_fini(&sub_reg);
+        }
+    }
+
+    if (!pixman_region32_not_empty(&total))
+    {
+        pixman_region32_fini(&total);
+        reset_out();
+        return false;
+    }
+
+    const pixman_box32_t *ext = pixman_region32_extents(&total);
+    const int max_w = (popup->width > 0) ? popup->width : surf->current.width;
+    const int max_h = (popup->height > 0) ? popup->height : surf->current.height;
+    const int x1    = std::max(0, static_cast<int>(ext->x1));
+    const int y1    = std::max(0, static_cast<int>(ext->y1));
+    const int x2    = (max_w > 0) ?
+        std::min(max_w, static_cast<int>(ext->x2)) :
+        static_cast<int>(ext->x2);
+    const int y2 = (max_h > 0) ?
+        std::min(max_h, static_cast<int>(ext->y2)) :
+        static_cast<int>(ext->y2);
+    pixman_region32_fini(&total);
+
+    if ((x2 <= x1) || (y2 <= y1))
+    {
+        reset_out();
+        return false;
+    }
+
+    if (out_x)
+    {
+        *out_x = x1;
+    }
+
+    if (out_y)
+    {
+        *out_y = y1;
+    }
+
+    if (out_width)
+    {
+        *out_width = x2 - x1;
+    }
+
+    if (out_height)
+    {
+        *out_height = y2 - y1;
+    }
+
+    return true;
+}
+
+bool sparrow_popup_accepts_input(SparrowPopup *popup)
+{
+    return sparrow_popup_get_input_bounds(popup, nullptr, nullptr, nullptr,
+        nullptr);
 }

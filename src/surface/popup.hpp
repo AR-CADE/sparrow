@@ -34,6 +34,11 @@ class SparrowPopup
     int64_t texture_id = 0;
     bool texture_registered = false;
     bool unconstrained = false; // Whether unconstrain has been called
+    bool accepts_input = true; // Whether popup or its subsurfaces have a non-empty input region
+    int input_x     = 0;
+    int input_y     = 0;
+    int input_width = 0;
+    int input_height = 0;
 
     // struct sparrow_cached_texture cache;
 
@@ -53,5 +58,8 @@ void sparrow_new_xdg_popup(struct wl_listener *listener, void *data);
 void sparrow_popup_damage_whole(SparrowPopup *popup);
 void sparrow_popup_unconstrain(SparrowPopup *popup);
 void sparrow_popups_update_on_output_change(Output *output);
+bool sparrow_popup_get_input_bounds(SparrowPopup *popup, int *out_x, int *out_y,
+    int *out_width, int *out_height);
+bool sparrow_popup_accepts_input(SparrowPopup *popup);
 
 #endif
